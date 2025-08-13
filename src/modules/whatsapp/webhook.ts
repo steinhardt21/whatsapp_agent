@@ -52,7 +52,8 @@ export const processWebhookMessage = async (body: WhatsAppWebhookBody): Promise<
     
     // Process incoming messages only
     if (value.messages && value.messages.length > 0) {
-      await processMessages(value.messages);
+      const whatsappPhoneId = value.metadata?.phone_number_id;
+      await processMessages(value.messages, whatsappPhoneId);
     }
     
     // Ignore status updates to remove "seeing" logs

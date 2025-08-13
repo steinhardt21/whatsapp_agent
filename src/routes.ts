@@ -5,6 +5,7 @@ import { verifyWebhook, processWebhookMessage } from './modules/whatsapp/index.j
 
 
 
+
 /**
  * HANDLERS
  */
@@ -34,6 +35,10 @@ const webhookMessageHandler = async (
   const result = await processWebhookMessage(request.body);
   return reply.status(result.statusCode).send(result.response);
 };
+
+
+
+
 
 
 
