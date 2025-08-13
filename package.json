@@ -1,0 +1,31 @@
+{
+  "name": "agent_v2",
+  "version": "1.0.0",
+  "description": "Minimal Fastify backend with TypeScript and functional programming",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "fastify",
+    "typescript",
+    "functional"
+  ],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.9.0",
+  "dependencies": {
+    "fastify": "^5.5.0",
+    "whatsapp": "0.0.5-Alpha"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "dotenv": "^16.0.0"
+  }
+}
