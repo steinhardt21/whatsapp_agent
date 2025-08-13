@@ -1,5 +1,5 @@
 import { createClient } from 'redis';
-import { sessionConfig } from './config.js';
+import { getSessionConfig } from './config.js';
 let redisClient = null;
 /**
  * Create and connect to Redis client
@@ -8,12 +8,15 @@ export async function getRedisClient() {
     if (redisClient && redisClient.isOpen) {
         return redisClient;
     }
+    // Get fresh configuration
+    const config = getSessionConfig();
     // Use Redis if configured, otherwise return null for in-memory storage
-    if (!sessionConfig.redisUrl && !sessionConfig.redisOptions) {
+    if (!config.redisOptions?.password || !config.redisOptions?.socket?.host) {
+        console.log('Redis not configured (missing password or host), using in-memory storage');
         return null;
     }
     try {
-        redisClient = createClient(sessionConfig.redisOptions);
+        redisClient = createClient(config.redisOptions);
         redisClient.on('error', (err) => {
             console.error('Redis Client Error:', err);
         });

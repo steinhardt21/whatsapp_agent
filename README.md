@@ -21,16 +21,28 @@ npm install
 
 ### Environment Variables
 
+Create a `.env` file in the project root:
+
 ```bash
 # Required for WhatsApp
 WEBHOOK_VERIFICATION_TOKEN=your_verification_token
 WHATSAPP_ACCESS_TOKEN=your_access_token
+WA_PHONE_NUMBER_ID=your_phone_number_id
+CLOUD_API_ACCESS_TOKEN=your_cloud_api_access_token
 
 # Required for AI features
 ANTHROPIC_API_KEY=your_anthropic_api_key
 
-# Redis is configured in code with your Redis Cloud credentials
-# The system will automatically use Redis if available, otherwise falls back to in-memory storage
+# Optional for Redis (if not set, uses in-memory storage)
+REDIS_HOST=redis-12992.c98.us-east-1-4.ec2.redns.redis-cloud.com
+REDIS_PORT=12992
+REDIS_USERNAME=default
+REDIS_PASSWORD=xQgISGWEP5BENFKUGfRd4L5swupjG9nW
+
+# Server Configuration (optional)
+LISTENER_PORT=3000
+CLOUD_API_VERSION=v16.0
+WEBHOOK_ENDPOINT=webhook
 ```
 
 ### Development

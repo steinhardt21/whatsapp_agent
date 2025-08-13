@@ -1,9 +1,9 @@
 import { sendMessage } from './messaging.js';
 import { sendTypingIndicator } from './status.js';
-import { SessionManager, sessionConfig } from '../session/index.js';
+import { SessionManager, getSessionConfig } from '../session/index.js';
 import { processUserMessage } from '../ai.js';
 // Initialize session manager
-const sessionManager = new SessionManager(sessionConfig);
+const sessionManager = new SessionManager(getSessionConfig());
 /**
  * Handle individual incoming message
  */
