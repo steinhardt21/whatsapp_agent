@@ -2,7 +2,7 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import { registerRoutes } from './routes.js';
 import { config } from './config.js';
-import { testConfiguration } from './modules/whatsapp.js';
+import { testConfiguration } from './modules/whatsapp/index.js';
 import { testAIConfiguration } from './modules/ai.js';
 
 // Start server function

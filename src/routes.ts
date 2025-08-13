@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { config } from './config.js';
 import type { WhatsAppWebhookBody } from './types.js';
-import { verifyWebhook, processWebhookMessage } from './modules/whatsapp.js';
+import { verifyWebhook, processWebhookMessage } from './modules/whatsapp/index.js';
 
 
 
