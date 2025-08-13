@@ -1,4 +1,4 @@
-// WhatsApp configuration - You need to set these environment variables
+// Application configuration - You need to set these environment variables
 export const config = {
   // Your WhatsApp phone number Id (sender)
   WA_PHONE_NUMBER_ID: process.env.WA_PHONE_NUMBER_ID || '',
@@ -16,5 +16,8 @@ export const config = {
   WEBHOOK_VERIFICATION_TOKEN: process.env.WEBHOOK_VERIFICATION_TOKEN || 'your_secret_verification_token_123',
   
   // Server port
-  LISTENER_PORT: parseInt(process.env.LISTENER_PORT || '3000', 10)
+  LISTENER_PORT: parseInt(process.env.LISTENER_PORT || '3000', 10),
+  
+  // Anthropic API key for AI features
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || ''
 };

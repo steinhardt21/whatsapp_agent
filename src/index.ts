@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import { registerRoutes } from './routes.js';
 import { config } from './config.js';
 import { testConfiguration } from './modules/whatsapp.js';
+import { testAIConfiguration } from './modules/ai.js';
 
 // Start server function
 const startServer = async () => {
@@ -35,8 +36,9 @@ const startServer = async () => {
     fastify.log.info(`4. Use verification token: ${config.WEBHOOK_VERIFICATION_TOKEN}`);
     fastify.log.info('');
     
-    // Test WhatsApp configuration
+    // Test configurations
     testConfiguration();
+    await testAIConfiguration();
     
   } catch (error) {
     console.error('Error starting server:', error);

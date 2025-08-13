@@ -1,6 +1,7 @@
 import WhatsApp from 'whatsapp';
 import { config } from '../config.js';
 import type { WhatsAppWebhookBody } from '../types.js';
+import { processUserMessage } from './ai.js';
 
 // Types for return values
 type WebhookResult = { success: boolean; response: string; statusCode: number };
@@ -66,9 +67,13 @@ const handleIncomingMessage = async (message: any): Promise<void> => {
   if (message.type === 'text' && message.text) {
     console.log(`Text: ${message.text.body}`);
     
-    // Auto-reply with "ciao" to every message
-    console.log(`Sending auto-reply "ciao" to ${message.from}`);
-    await sendMessage(message.from, 'ciao');
+    // Process message with AI agent
+    console.log(`Processing message with AI agent for ${message.from}`);
+    const aiResponse = await processUserMessage(message.from, message.text.body);
+    
+    // Send AI-generated response
+    console.log(`Sending AI response to ${message.from}: "${aiResponse}"`);
+    await sendMessage(message.from, aiResponse);
   }
 };
 
