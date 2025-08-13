@@ -67,24 +67,17 @@ const handleIncomingMessage = async (message: any): Promise<void> => {
   if (message.type === 'text' && message.text) {
     console.log(`Text: ${message.text.body}`);
     
-    // Process message with AI agent
-    console.log(`Processing message with AI agent for ${message.from}`);
-    const aiResponse = await processUserMessage(message.from, message.text.body);
+    // Send typing indicator with message ID
+    await sendTypingIndicator(message.from, message.id);
     
-    // Send AI-generated response
-    console.log(`Sending AI response to ${message.from}: "${aiResponse}"`);
-    await sendMessage(message.from, aiResponse);
+    // For now, just test the typing effect
+    console.log(`Typing indicator sent to ${message.from}. Testing complete!`);
+    
+    // Optional: Send a simple confirmation after a few seconds
+    setTimeout(async () => {
+      await sendMessage(message.from, `✅ Typing test completato! Hai scritto: "${message.text.body}"`);
+    }, 3000); // Wait 3 seconds to see the typing effect
   }
-};
-
-/**
- * Handle message status updates
- */
-const handleMessageStatus = (status: any): void => {
-  console.log(`Message status update:`);
-  console.log(`Message ID: ${status.id}`);
-  console.log(`Status: ${status.status}`);
-  console.log(`Recipient: ${status.recipient_id}`);
 };
 
 /**
@@ -94,13 +87,6 @@ const processMessages = async (messages: any[]): Promise<void> => {
   for (const message of messages) {
     await handleIncomingMessage(message);
   }
-};
-
-/**
- * Process all status updates in an array
- */
-const processStatuses = (statuses: any[]): void => {
-  statuses.forEach(handleMessageStatus);
 };
 
 /**
@@ -123,19 +109,57 @@ export const processWebhookMessage = async (body: WhatsAppWebhookBody): Promise<
     const change = body.entry[0].changes[0];
     const value = change.value;
     
-    // Process incoming messages
-    if (value.messages && value.messages.length > 0) {
-      await processMessages(value.messages);
-    }
-    
-    // Process message status updates
-    if (value.statuses && value.statuses.length > 0) {
-      processStatuses(value.statuses);
-    }
+          // Process incoming messages only
+      if (value.messages && value.messages.length > 0) {
+        await processMessages(value.messages);
+      }
+      
+      // Ignore status updates to remove "seeing" logs
   }
   
   return { success: true, response: 'EVENT_RECEIVED', statusCode: 200 };
 };
+
+/**
+ * Send typing indicator to show bot is processing
+ */
+export const sendTypingIndicator = async (to: string, messageId: string): Promise<boolean> => {
+  try {
+    console.log(`Sending typing indicator to ${to} for message ${messageId}`);
+    
+    const response = await fetch(`https://graph.facebook.com/${config.CLOUD_API_VERSION}/${config.WA_PHONE_NUMBER_ID}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.CLOUD_API_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: messageId,
+        typing_indicator: {
+          type: 'text'
+        }
+      })
+    });
+
+    if (response.ok) {
+      console.log('Typing indicator sent successfully');
+      return true;
+    } else {
+      const errorData = await response.text();
+      console.error('Failed to send typing indicator:', response.statusText, errorData);
+      return false;
+    }
+  } catch (error) {
+    console.error('Error sending typing indicator:', error);
+    return false;
+  }
+};
+
+
+
+
 
 /**
  * Send a text message
