@@ -4,11 +4,13 @@ A lightweight WhatsApp bot with persistent conversation sessions.
 
 ## Features
 
+- **Smart Message Batching**: Combines rapid consecutive messages into coherent requests
 - **AI Assistant**: Mazzantini&Associati virtual assistant with professional Italian responses
 - **Session Management**: Persistent conversation history per phone number with Redis Cloud
 - **WhatsApp Integration**: Native WhatsApp messaging with typing indicators
 - **Service Detection**: Automatically detects business inquiries and offers appointments
 - **Memory**: Remembers conversation context and user interactions
+- **🕒 Time-Aware Agent**: Knows current time and day in Rome timezone for contextual responses
 - **Reset Command**: Type "RESET" to clear all conversation data for testing
 
 ## Quick Start
@@ -61,11 +63,13 @@ npm start
 ## How It Works
 
 1. **Webhook Setup**: Receives WhatsApp messages via webhook
-2. **Session Creation**: Creates persistent sessions per phone number in Redis Cloud
-3. **AI Processing**: Processes messages with Mazzantini&Associati assistant personality
-4. **Service Detection**: Identifies business inquiries and proposes appointments
-5. **Memory Integration**: Uses conversation history for context-aware responses
-6. **Auto Cleanup**: Sessions expire after 1 hour of inactivity
+2. **Message Orchestration**: Entry agent batches rapid consecutive messages (2-second window)
+3. **Smart Processing**: Combines multiple messages into coherent requests before AI processing
+4. **Session Management**: Creates persistent sessions per phone number in Redis Cloud
+5. **AI Processing**: Processes combined messages with Mazzantini&Associati assistant personality
+6. **Service Detection**: Identifies business inquiries and proposes appointments
+7. **Memory Integration**: Uses conversation history for context-aware responses
+8. **Auto Cleanup**: Sessions expire after 1 hour of inactivity
 
 ## Session Structure
 
@@ -87,6 +91,40 @@ Each user session includes:
 - `GET /webhook` - WhatsApp webhook verification
 - `POST /webhook` - WhatsApp message processing
 
+## Message Orchestration
+
+### Smart Batching
+- **2-second window**: Waits for additional messages before processing
+- **Max 5 messages**: Processes immediately when batch reaches 5 messages
+- **Intelligent combination**: Merges messages like "hello" + "i want to know" + "your services" → "hello i want to know your services"
+- **Interruption handling**: If new messages arrive during processing, stops current processing and restarts with all messages combined
+
+### Example Scenarios:
+
+#### Scenario 1: Basic Batching
+```
+User sends rapidly:
+- "hello" 
+- "i want to know"
+- "the services of the company"
+
+Agent receives:
+- "hello i want to know the services of the company" (processed as one request)
+```
+
+#### Scenario 2: Interruption Handling (The Edge Case)
+```
+User sends:
+- "ciao" (starts processing)
+- "mi chiamo Alex" (interrupts processing)
+
+What happens:
+1. First message starts processing
+2. Second message arrives and signals interruption
+3. Processing stops and restarts with both messages
+4. Agent receives: "ciao mi chiamo Alex" (combined, single response)
+```
+
 ## Testing Commands
 
 - **RESET** - Send exactly "RESET" (case insensitive) to clear all conversation data for that user
@@ -96,10 +134,12 @@ Each user session includes:
 ```
 src/
 ├── modules/
-│   ├── session/          # Session management
-│   └── whatsapp/         # WhatsApp integration
-├── types.ts              # TypeScript definitions
-├── config.ts             # Configuration
-├── routes.ts             # API routes
-└── index.ts              # Main server
+│   ├── message-orchestrator/  # Smart message batching
+│   ├── session/              # Session management
+│   ├── whatsapp/             # WhatsApp integration
+│   └── ai.ts                 # AI processing
+├── types.ts                  # TypeScript definitions
+├── config.ts                 # Configuration
+├── routes.ts                 # API routes
+└── index.ts                  # Main server
 ```

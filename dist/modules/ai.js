@@ -1,6 +1,33 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { generateText } from 'ai';
 import { config } from '../config.js';
+/**
+ * Get current time and day in Rome timezone
+ */
+const getRomeTimeAndDay = () => {
+    const now = new Date();
+    const romeTime = now.toLocaleString('it-IT', {
+        timeZone: 'Europe/Rome',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    });
+    const romeDay = now.toLocaleDateString('it-IT', {
+        timeZone: 'Europe/Rome',
+        weekday: 'long'
+    });
+    const romeDate = now.toLocaleDateString('it-IT', {
+        timeZone: 'Europe/Rome',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+    return {
+        currentTime: romeTime,
+        currentDay: romeDay,
+        currentDate: romeDate
+    };
+};
 // Message history storage (in a real app, use a database)
 const conversationHistory = new Map();
 /**
@@ -41,11 +68,14 @@ export const processUserMessage = async (userId, userMessage, conversationHistor
         }));
         // Add current user message
         aiHistory.push({ role: 'user', content: userMessage });
+        // Get current Rome time and day
+        const { currentTime, currentDay, currentDate } = getRomeTimeAndDay();
         // Log conversation context for debugging
         console.log(`AI Context for ${userId}:`);
         console.log(`- Is first message: ${isFirstMessage}`);
         console.log(`- Previous messages: ${conversationHistory.length}`);
         console.log(`- Total AI history: ${aiHistory.length}`);
+        console.log(`- Rome time: ${currentTime} (${currentDay}, ${currentDate})`);
         if (conversationHistory.length > 0) {
             console.log('- Last few messages:', conversationHistory.slice(-3).map(m => `${m.role}: "${m.content}"`));
         }
@@ -98,7 +128,9 @@ Quando rilevi interesse per un servizio:
 <context>
 Stai comunicando via WhatsApp. ${isFirstMessage ? 'Questo è il primo messaggio della conversazione.' : `Hai già scambiato ${conversationHistory.length} messaggi con questo utente. Puoi vedere la cronologia completa dei messaggi precedenti per mantenere il contesto.`}
 
-IMPORTANTE: Hai accesso alla cronologia completa della conversazione. Usa sempre le informazioni precedenti per dare risposte coerenti e contestuali.
+ORARIO ATTUALE: ${currentTime} di ${currentDay}, ${currentDate} (fuso orario di Roma)
+
+IMPORTANTE: Hai accesso alla cronologia completa della conversazione e all'orario attuale. Usa sempre le informazioni precedenti per dare risposte coerenti e contestuali. Se l'utente chiede l'ora o informazioni temporali, usa l'orario di Roma fornito.
 </context>`,
             messages: aiHistory
         });
