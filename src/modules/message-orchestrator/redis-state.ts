@@ -1,6 +1,11 @@
 import { getRedisClient } from '../session/redis-client.js';
 import { IncomingMessage } from './types.js';
 
+// Global storage for abort controllers (in-memory)
+declare global {
+  var abortControllers: Map<string, AbortController> | undefined;
+}
+
 /**
  * Redis-based orchestrator state management for cross-instance coordination
  */
@@ -38,6 +43,13 @@ export class RedisOrchestratorState {
    */
   private getLockKey(phoneNumber: string): string {
     return `${this.keyPrefix}lock:${phoneNumber}`;
+  }
+
+  /**
+   * Get the Redis key for a phone number's processing generation
+   */
+  private getGenerationKey(phoneNumber: string): string {
+    return `${this.keyPrefix}generation:${phoneNumber}`;
   }
 
   /**
@@ -205,6 +217,97 @@ export class RedisOrchestratorState {
     } catch (error) {
       console.error('Error checking processing timeout:', error);
       return true;
+    }
+  }
+
+  /**
+   * Increment processing generation for a phone number (signals interruption needed)
+   */
+  async incrementProcessingGeneration(phoneNumber: string): Promise<number> {
+    if (!this.redisClient) return 1;
+
+    try {
+      const generationKey = this.getGenerationKey(phoneNumber);
+      const newGeneration = await this.redisClient.incr(generationKey);
+      
+      // Set expiration to cleanup old generations
+      await this.redisClient.expire(generationKey, 600); // 10 minutes
+      
+      console.log(`🔄 Incremented processing generation for ${phoneNumber} to ${newGeneration}`);
+      return newGeneration;
+    } catch (error) {
+      console.error('Error incrementing processing generation:', error);
+      return 1;
+    }
+  }
+
+  /**
+   * Get current processing generation for a phone number
+   */
+  async getProcessingGeneration(phoneNumber: string): Promise<number> {
+    if (!this.redisClient) return 1;
+
+    try {
+      const generationKey = this.getGenerationKey(phoneNumber);
+      const generation = await this.redisClient.get(generationKey);
+      return generation ? parseInt(generation, 10) : 1;
+    } catch (error) {
+      console.error('Error getting processing generation:', error);
+      return 1;
+    }
+  }
+
+  /**
+   * Store abort controller reference for a processing generation
+   */
+  async setAbortController(phoneNumber: string, generation: number, abortController: AbortController): Promise<void> {
+    // Store in-memory since AbortController can't be serialized to Redis
+    // In a distributed setup, you'd use a different mechanism
+    const key = `${phoneNumber}:${generation}`;
+    if (!global.abortControllers) {
+      global.abortControllers = new Map();
+    }
+    global.abortControllers.set(key, abortController);
+    
+    console.log(`📝 Stored abort controller for ${phoneNumber} generation ${generation}`);
+  }
+
+  /**
+   * Get and remove abort controller for a processing generation
+   */
+  async getAbortController(phoneNumber: string, generation: number): Promise<AbortController | null> {
+    const key = `${phoneNumber}:${generation}`;
+    if (!global.abortControllers) {
+      return null;
+    }
+    
+    const controller = global.abortControllers.get(key);
+    if (controller) {
+      global.abortControllers.delete(key);
+      console.log(`🗑️  Retrieved abort controller for ${phoneNumber} generation ${generation}`);
+    }
+    
+    return controller || null;
+  }
+
+  /**
+   * Abort current processing for a phone number
+   */
+  async abortCurrentProcessing(phoneNumber: string): Promise<boolean> {
+    try {
+      const currentGeneration = await this.getProcessingGeneration(phoneNumber);
+      const abortController = await this.getAbortController(phoneNumber, currentGeneration);
+      
+      if (abortController && !abortController.signal.aborted) {
+        abortController.abort();
+        console.log(`⏹️  Aborted processing for ${phoneNumber} generation ${currentGeneration}`);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error aborting current processing:', error);
+      return false;
     }
   }
 

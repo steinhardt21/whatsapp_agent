@@ -71,15 +71,30 @@ export const processUserMessage = async (
   userId: string, 
   userMessage: string, 
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string; timestamp: Date }> = [],
-  isFirstMessage: boolean = false
+  isFirstMessage: boolean = false,
+  abortSignal?: AbortSignal
 ): Promise<string> => {
   try {
+    // Check for abort at the start
+    if (abortSignal?.aborted) {
+      const error = new Error('Processing aborted before AI call');
+      error.name = 'AbortError';
+      throw error;
+    }
+
     console.log(`Processing message from ${userId}: "${userMessage}"`);
     
     // Check if Anthropic API key is configured
     if (!config.ANTHROPIC_API_KEY) {
       console.warn('Anthropic API key not configured, using fallback response');
       return `Ciao, sono l'assistente di Mazzantini Associati. Al momento l'AI non è configurata. Come posso esserti utile?`;
+    }
+
+    // Check for abort before building history
+    if (abortSignal?.aborted) {
+      const error = new Error('Processing aborted before building conversation history');
+      error.name = 'AbortError';
+      throw error;
     }
 
     // Convert session history to AI format
@@ -102,6 +117,13 @@ export const processUserMessage = async (
     console.log(`- Rome time: ${currentTime} (${currentDay}, ${currentDate})`);
     if (conversationHistory.length > 0) {
       console.log('- Last few messages:', conversationHistory.slice(-3).map(m => `${m.role}: "${m.content}"`));
+    }
+
+    // Check for abort before AI call
+    if (abortSignal?.aborted) {
+      const error = new Error('Processing aborted before AI generation');
+      error.name = 'AbortError';
+      throw error;
     }
     
     // Generate AI response with Mazzantini&Associati system prompt
@@ -181,7 +203,8 @@ IMPORTANTE: Hai accesso alla cronologia completa della conversazione e all'orari
       tools: {
         mazzantiniResearch: mazzantiniResearchTool,
         mazzanitniInfo: mazzanitniInfoTool,
-      }
+      },
+      abortSignal // Pass abort signal to AI generation
     });
     
     console.log(`AI response for ${userId}: "${text}"`);

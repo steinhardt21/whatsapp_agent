@@ -22,6 +22,7 @@ export interface ProcessingState {
   lastMessageAt: Date;
   processingAbortController?: AbortController;
   shouldRestart: boolean;
+  processingGeneration: number; // New: Track processing generation for interruption
 }
 
 export interface OrchestratorConfig {

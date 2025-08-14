@@ -79,7 +79,8 @@ export const processBatch = async (batch: MessageBatch, abortSignal?: AbortSigna
       phoneNumber,
       combinedMessage,
       conversationHistory,
-      isFirstMessage
+      isFirstMessage,
+      abortSignal
     );
     
     // Check for abort before finalizing
