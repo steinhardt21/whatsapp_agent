@@ -3,6 +3,7 @@ import { SessionManager, getSessionConfig } from '../session/index.js';
 import { processUserMessage } from '../ai.js';
 import { sendMessage } from '../whatsapp/messaging.js';
 import { sendTypingIndicator } from '../whatsapp/status.js';
+import { redisOrchestratorState } from './redis-state.js';
 
 // Initialize session manager
 const sessionManager = new SessionManager(getSessionConfig());
@@ -99,12 +100,18 @@ export const processBatch = async (batch: MessageBatch, abortSignal?: AbortSigna
       awaitingResponse: false
     });
     
-    // Send response
-    await sendMessage(phoneNumber, response);
+    // Final check: verify no new messages arrived before sending response
+    await checkForNewMessagesBeforeSending(phoneNumber, batch, response);
     
     console.log(`✅ Batch processed successfully for ${phoneNumber}`);
     
-  } catch (error) {
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      // Re-throw abort errors to be handled by the restart logic
+      console.log(`🔄 Abort error in processBatch for ${phoneNumber}: ${error.message}`);
+      throw error;
+    }
+    
     console.error(`❌ Error processing batch for ${phoneNumber}:`, error);
     
     // Send error message
@@ -114,6 +121,52 @@ export const processBatch = async (batch: MessageBatch, abortSignal?: AbortSigna
     await sessionManager.updateConversationState(phoneNumber, {
       awaitingResponse: false
     });
+  }
+};
+
+/**
+ * Check for new messages before sending response - restart processing if needed
+ */
+const checkForNewMessagesBeforeSending = async (
+  phoneNumber: string,
+  originalBatch: MessageBatch,
+  response: string
+): Promise<void> => {
+  try {
+    console.log(`🔍 Final check for new messages before sending response to ${phoneNumber}`);
+    
+    // Check if there are any new messages in the batch
+    const currentMessages = await redisOrchestratorState.getBatch(phoneNumber);
+    
+    if (currentMessages.length > 0) {
+      console.log(`🚨 Found ${currentMessages.length} new messages before sending - triggering restart`);
+      
+      // New messages found! We need to restart processing
+      // Increment generation to signal restart needed
+      const newGeneration = await redisOrchestratorState.incrementProcessingGeneration(phoneNumber);
+      
+      console.log(`🔄 Restart triggered for ${phoneNumber} due to last-minute messages (generation ${newGeneration})`);
+      
+      // Throw abort error to trigger restart in the main processing loop
+      const error = new Error('New messages found before sending - restarting processing');
+      error.name = 'AbortError';
+      throw error;
+    }
+    
+    // No new messages - safe to send the response
+    console.log(`✅ No new messages found - sending response to ${phoneNumber}`);
+    await sendMessage(phoneNumber, response);
+    
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      // Re-throw abort errors to trigger restart
+      throw error;
+    } else {
+      // For other errors, still try to send the original response
+      console.error(`⚠️  Error in final message check for ${phoneNumber}:`, error);
+      console.log(`📤 Sending original response despite check error`);
+      await sendMessage(phoneNumber, response);
+    }
   }
 };
 

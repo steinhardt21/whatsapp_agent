@@ -185,7 +185,7 @@ NOTA: Il sistema è stato aggiornato per utilizzare programmazione funzionale pu
 </tools_usage>
 
 <whatsapp_message_rules>
-<length>Scrivi messaggi BREVI (massimo 25-30 parole totali)</length>
+<length>Scrivi messaggi BREVI ma completi</length>
 <sentences>Usa frasi semplici che terminano con punti</sentences>
 <formatting>NESSUN simbolo di formattazione (* ** • etc.) - solo testo normale</formatting>
 <emojis>Usa emoji solo alla fine delle frasi</emojis>

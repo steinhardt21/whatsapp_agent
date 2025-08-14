@@ -1,7 +1,7 @@
 import { IncomingMessage, MessageBatch } from './types.js';
 import { orchestratorConfig } from './config.js';
 import { redisOrchestratorState } from './redis-state.js';
-import { processBatch } from './processor.js';
+import { processBatch, getSessionManagerInstance } from './processor.js';
 import { SessionManager, getSessionConfig } from '../session/index.js';
 import { sendMessage } from '../whatsapp/messaging.js';
 
@@ -166,6 +166,22 @@ const processUserBatch = async (phoneNumber: string): Promise<void> => {
           const currentGeneration = await redisOrchestratorState.getProcessingGeneration(phoneNumber);
           if (currentGeneration > processingGeneration) {
             console.log(`🚀 Restarting processing for ${phoneNumber} with new generation ${currentGeneration}`);
+            
+            // If this was a final-check restart, we need to clean up the session state
+            // since the response was already added to history but not sent
+            if (error.message?.includes('New messages found before sending')) {
+              console.log(`🧹 Cleaning up session state due to final-check restart for ${phoneNumber}`);
+              
+              // Remove the last assistant message that wasn't sent
+              try {
+                const sessionManagerInstance = getSessionManagerInstance();
+                await sessionManagerInstance.removeLastMessage(phoneNumber, 'assistant');
+                console.log(`✅ Removed unsent assistant message from session for ${phoneNumber}`);
+              } catch (cleanupError) {
+                console.warn(`⚠️  Could not clean up session for ${phoneNumber}:`, cleanupError);
+                // Continue anyway - better to have extra history than to fail
+              }
+            }
             
             // Update generation and create new abort controller
             processingGeneration = currentGeneration;
