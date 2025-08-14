@@ -1,8 +1,8 @@
 import { MessageBatch } from './types.js';
 import { SessionManager, getSessionConfig } from '../session/index.js';
-import { processUserMessage } from '../ai.js';
+import { processUserMessage } from '../ai-simple.js';
 import { sendMessage } from '../whatsapp/messaging.js';
-import { sendTypingIndicator } from '../whatsapp/status.js';
+
 import { redisOrchestratorState } from './redis-state.js';
 
 // Initialize session manager
@@ -58,9 +58,8 @@ export const processBatch = async (batch: MessageBatch, abortSignal?: AbortSigna
       throw error;
     }
     
-    // Send typing indicator (using the last message ID)
+    // Typing indicator is already sent immediately upon message receipt
     const lastMessage = messages[messages.length - 1];
-    await sendTypingIndicator(phoneNumber, lastMessage.id);
     
     // Check for abort before AI processing
     if (abortSignal?.aborted) {
@@ -80,7 +79,6 @@ export const processBatch = async (batch: MessageBatch, abortSignal?: AbortSigna
       phoneNumber,
       combinedMessage,
       conversationHistory,
-      isFirstMessage,
       abortSignal
     );
     

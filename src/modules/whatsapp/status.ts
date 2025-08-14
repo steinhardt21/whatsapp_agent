@@ -7,6 +7,7 @@ export const sendTypingIndicator = async (to: string, messageId: string): Promis
   try {
     console.log(`Sending typing indicator to ${to} for message ${messageId}`);
     
+    // Send typing indicator using WhatsApp Business API
     const response = await fetch(`https://graph.facebook.com/${config.CLOUD_API_VERSION}/${config.WA_PHONE_NUMBER_ID}/messages`, {
       method: 'POST',
       headers: {

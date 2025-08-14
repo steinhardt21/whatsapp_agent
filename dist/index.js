@@ -4,6 +4,7 @@ import { registerRoutes } from './routes.js';
 import { config } from './config.js';
 import { testConfiguration } from './modules/whatsapp/index.js';
 import { testAIConfiguration } from './modules/ai.js';
+import { getMaintenanceManager } from './modules/maintenance/index.js';
 // Start server function
 const startServer = async () => {
     try {
@@ -33,6 +34,11 @@ const startServer = async () => {
         // Test configurations
         testConfiguration();
         await testAIConfiguration();
+        // Start Redis maintenance (runs every 24 hours)
+        console.log('🧹 Starting Redis maintenance system...');
+        const maintenanceManager = getMaintenanceManager();
+        maintenanceManager.startMaintenance(24); // 24 hours interval
+        console.log('✅ Redis maintenance system started (24h intervals)');
     }
     catch (error) {
         console.error('Error starting server:', error);

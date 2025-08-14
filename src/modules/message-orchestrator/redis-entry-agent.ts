@@ -4,6 +4,7 @@ import { redisOrchestratorState } from './redis-state.js';
 import { processBatch, getSessionManagerInstance } from './processor.js';
 import { SessionManager, getSessionConfig } from '../session/index.js';
 import { sendMessage } from '../whatsapp/messaging.js';
+import { sendTypingIndicator } from '../whatsapp/status.js';
 
 // Initialize session manager
 const sessionManager = new SessionManager(getSessionConfig());
@@ -20,6 +21,11 @@ export const handleIncomingMessage = async (
   console.log(`📨 Redis entry agent received message from ${phoneNumber}: "${userMessage}"`);
 
   try {
+    // Send typing indicator immediately after receiving message
+    console.log(`⌨️ Sending typing indicator for ${phoneNumber} (message: ${messageId})`);
+    await sendTypingIndicator(phoneNumber, messageId);
+    console.log(`✅ Typing indicator sent for ${phoneNumber}`);
+    
     // Handle RESET command immediately, bypassing batching
     if (userMessage.trim().toUpperCase() === 'RESET') {
       console.log(`🔄 RESET command received from ${phoneNumber} - processing immediately`);

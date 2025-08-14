@@ -5,6 +5,7 @@ import { config } from '../../config.js';
 export const sendTypingIndicator = async (to, messageId) => {
     try {
         console.log(`Sending typing indicator to ${to} for message ${messageId}`);
+        // Send typing indicator using WhatsApp Business API
         const response = await fetch(`https://graph.facebook.com/${config.CLOUD_API_VERSION}/${config.WA_PHONE_NUMBER_ID}/messages`, {
             method: 'POST',
             headers: {

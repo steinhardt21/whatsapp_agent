@@ -16,16 +16,27 @@ export class CalendarAgent {
   }
 
   /**
-   * Initialize the MCP client connection
+   * Initialize the MCP client connection with retry mechanism
    */
-  private async initializeMCPClient(): Promise<void> {
+  private async initializeMCPClient(retryCount: number = 0): Promise<void> {
+    const maxRetries = 3;
+    const retryDelay = 2000; // 2 seconds
+
     if (this.mcpClient) {
-      console.log('🔄 MCP client already initialized, reusing existing connection');
-      return; // Already initialized
+      console.log('🔄 MCP client already initialized, testing connection...');
+      try {
+        // Test if the existing connection is still alive
+        await this.mcpClient.listTools();
+        console.log('✅ [CALENDAR DEBUG] Existing MCP connection is healthy');
+        return;
+      } catch (error) {
+        console.log('⚠️ [CALENDAR DEBUG] Existing connection is stale, reinitializing...');
+        await this.closeMCPClient();
+      }
     }
 
     try {
-      console.log(`🔗 [CALENDAR DEBUG] Attempting to connect to Google Calendar MCP server: ${this.mcpServerUrl}`);
+      console.log(`🔗 [CALENDAR DEBUG] Attempting to connect to Google Calendar MCP server: ${this.mcpServerUrl} (attempt ${retryCount + 1}/${maxRetries + 1})`);
       console.log(`🔗 [CALENDAR DEBUG] Creating SSE transport using AI SDK format...`);
       
       // Use the AI SDK's preferred SSE transport configuration
@@ -37,22 +48,52 @@ export class CalendarAgent {
           headers: {
             'Accept': 'text/event-stream',
             'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'User-Agent': 'CalendarAgent/1.0'
           }
         }
       });
       
       console.log(`🔗 [CALENDAR DEBUG] MCP client created with SSE transport...`);
       
-      console.log('✅ [CALENDAR DEBUG] Calendar MCP client initialized successfully');
+      // Test the connection immediately by trying to list tools
+      await this.mcpClient.listTools();
+      
+      console.log('✅ [CALENDAR DEBUG] Calendar MCP client initialized and tested successfully');
       console.log('🔍 [CALENDAR DEBUG] Client object:', typeof this.mcpClient, !!this.mcpClient);
+      
     } catch (error) {
-      console.error('❌ [CALENDAR DEBUG] Failed to initialize Calendar MCP client:', error);
+      console.error(`❌ [CALENDAR DEBUG] Failed to initialize Calendar MCP client (attempt ${retryCount + 1}):`, error);
       console.error('❌ [CALENDAR DEBUG] Error details:', {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
         name: error instanceof Error ? error.name : typeof error
       });
-      throw new Error(`Failed to connect to calendar MCP server: ${error}`);
+      
+      this.mcpClient = null;
+      
+      if (retryCount < maxRetries) {
+        console.log(`🔄 [CALENDAR DEBUG] Retrying connection in ${retryDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        return this.initializeMCPClient(retryCount + 1);
+      } else {
+        throw new Error(`Failed to connect to calendar MCP server after ${maxRetries + 1} attempts: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  /**
+   * Close MCP client connection safely
+   */
+  private async closeMCPClient(): Promise<void> {
+    if (this.mcpClient) {
+      try {
+        await this.mcpClient.close();
+        console.log('🔌 [CALENDAR DEBUG] MCP client connection closed');
+      } catch (error) {
+        console.error('⚠️ [CALENDAR DEBUG] Error closing MCP client:', error);
+      }
+      this.mcpClient = null;
     }
   }
 
@@ -99,12 +140,15 @@ export class CalendarAgent {
       const tools = await this.getCalendarTools();
       
       if (tools.SearchEvent) {
-        const result = await tools.SearchEvent.execute({
-          query,
-          timeMin,
-          timeMax
-        });
+        // Use the exact schema format expected by the MCP server
+        const searchParams = {
+          Query: query || '', // Query is required according to schema
+          After: timeMin || new Date().toISOString(),
+          Before: timeMax || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days from now
+        };
         
+        console.log(`📋 [CALENDAR DEBUG] Search parameters (MCP format):`, searchParams);
+        const result = await tools.SearchEvent.execute(searchParams);
         console.log(`🔍 Calendar search results for "${query}":`, result);
         return result;
       } else {
@@ -114,6 +158,52 @@ export class CalendarAgent {
       console.error('❌ Error searching calendar events:', error);
       throw error;
     }
+  }
+
+  /**
+   * Search for events where a specific user is an attendee
+   */
+  async searchUserEvents(userEmail: string, timeMin?: string, timeMax?: string): Promise<any> {
+    console.log(`🔍 [CALENDAR DEBUG] Searching events for user email: ${userEmail}`);
+    
+    try {
+      // Get all events in the time range
+      const allEvents = await this.searchEvents('', timeMin, timeMax);
+      
+      if (!allEvents || !allEvents.events) {
+        console.log(`📋 [CALENDAR DEBUG] No events found in calendar`);
+        return { events: [] };
+      }
+
+      // Filter events where the user is an attendee
+      const userEvents = allEvents.events.filter((event: any) => {
+        if (!event.attendees) return false;
+        
+        // Check if user email is in attendees list
+        const isAttendee = event.attendees.some((attendee: any) => {
+          const attendeeEmail = attendee.email || attendee.Attendees || attendee;
+          console.log(`🔍 [CALENDAR DEBUG] Checking attendee: ${attendeeEmail} vs user: ${userEmail}`);
+          return attendeeEmail && attendeeEmail.toLowerCase() === userEmail.toLowerCase();
+        });
+        
+        console.log(`🔍 [CALENDAR DEBUG] Event "${event.summary || event.event_title}" - User is attendee: ${isAttendee}`);
+        return isAttendee;
+      });
+
+      console.log(`✅ [CALENDAR DEBUG] Found ${userEvents.length} events for user ${userEmail}`);
+      return { events: userEvents };
+      
+    } catch (error) {
+      console.error('❌ Error searching user events:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all events in a time range
+   */
+  async getAllEvents(timeMin?: string, timeMax?: string): Promise<any> {
+    return this.searchEvents('', timeMin, timeMax);
   }
 
   /**
@@ -213,8 +303,13 @@ export class CalendarAgent {
         
         console.log(`📅 [CALENDAR DEBUG] CreateEvent execution completed`);
         console.log('📥 [CALENDAR DEBUG] CreateEvent result:', JSON.stringify(result, null, 2));
+        
+        // Extract Google Calendar event ID from the result
+        const enhancedResult = this.extractEventDetails(result);
+        
         console.log(`✅ [CALENDAR DEBUG] Successfully created calendar event: "${eventData.summary}"`);
-        return result;
+        console.log(`🆔 [CALENDAR DEBUG] Extracted event details:`, enhancedResult);
+        return enhancedResult;
       } else {
         console.error('❌ [CALENDAR DEBUG] CreateEvent tool not available in tools:', Object.keys(tools));
         throw new Error('CreateEvent tool not available');
@@ -241,10 +336,17 @@ export class CalendarAgent {
       const tools = await this.getCalendarTools();
       
       if (tools.UpdateEvent) {
-        const result = await tools.UpdateEvent.execute({
-          eventId,
-          ...eventData
-        });
+        // Use the exact schema format expected by the MCP server
+        const updateParams = {
+          Event_ID: eventId,
+          event_title: eventData.summary || eventData.event_title,
+          event_description: eventData.description || eventData.event_description || '',
+          Start: eventData.start?.dateTime || eventData.Start,
+          End: eventData.end?.dateTime || eventData.End
+        };
+        
+        console.log(`📋 [CALENDAR DEBUG] Update parameters (MCP format):`, updateParams);
+        const result = await tools.UpdateEvent.execute(updateParams);
         
         console.log(`📝 Updated calendar event ${eventId}:`, result);
         return result;
@@ -258,6 +360,125 @@ export class CalendarAgent {
   }
 
   /**
+   * Extract Google Calendar event details from MCP response
+   */
+  private extractEventDetails(mcpResult: any): any {
+    console.log(`🔍 [CALENDAR DEBUG] Extracting event details from MCP result...`);
+    
+    if (!mcpResult) {
+      console.log(`⚠️ [CALENDAR DEBUG] No MCP result to extract from`);
+      return mcpResult;
+    }
+
+    // Create enhanced result with extracted details
+    const enhancedResult = {
+      ...mcpResult,
+      // MCP server response event ID (if available)
+      eventId: mcpResult.eventId || mcpResult.id || mcpResult.Event_ID,
+      // Google Calendar event ID - prioritize 'id' field from response
+      googleCalendarId: mcpResult.id || // This is the main Google Calendar ID like "ejqb3uji24db31j7subsica578"
+                       mcpResult.googleCalendarId || 
+                       mcpResult.google_calendar_id || 
+                       mcpResult.calendarId ||
+                       mcpResult.calendar_id ||
+                       mcpResult.eventId ||
+                       mcpResult.Event_ID,
+      // Calendar event URL (if available)
+      calendarEventUrl: mcpResult.htmlLink || 
+                       mcpResult.html_link || 
+                       mcpResult.eventUrl ||
+                       mcpResult.event_url ||
+                       mcpResult.webLink ||
+                       mcpResult.web_link
+    };
+
+    // Try to extract from nested objects
+    if (mcpResult.data) {
+      enhancedResult.googleCalendarId = enhancedResult.googleCalendarId || 
+                                       mcpResult.data.id || // Prioritize 'id' field
+                                       mcpResult.data.eventId ||
+                                       mcpResult.data.Event_ID;
+      enhancedResult.calendarEventUrl = enhancedResult.calendarEventUrl ||
+                                       mcpResult.data.htmlLink ||
+                                       mcpResult.data.html_link;
+    }
+
+    // Try to extract from response array if present
+    if (mcpResult.response && Array.isArray(mcpResult.response) && mcpResult.response.length > 0) {
+      const firstResponse = mcpResult.response[0];
+      enhancedResult.googleCalendarId = enhancedResult.googleCalendarId || 
+                                       firstResponse.id || // Main Google Calendar ID
+                                       firstResponse.eventId ||
+                                       firstResponse.Event_ID;
+      enhancedResult.calendarEventUrl = enhancedResult.calendarEventUrl ||
+                                       firstResponse.htmlLink ||
+                                       firstResponse.html_link;
+    }
+
+    // Try to extract from content array (MCP common format)
+    if (Array.isArray(mcpResult.content) && mcpResult.content.length > 0) {
+      const firstContent = mcpResult.content[0];
+      if (firstContent && firstContent.text) {
+        try {
+          // Parse the JSON string inside content[0].text
+          const eventArray = JSON.parse(firstContent.text);
+          if (Array.isArray(eventArray) && eventArray.length > 0) {
+            const eventData = eventArray[0];
+            enhancedResult.googleCalendarId = enhancedResult.googleCalendarId || eventData.id;
+            enhancedResult.calendarEventUrl = enhancedResult.calendarEventUrl || 
+                                             eventData.htmlLink || 
+                                             eventData.html_link;
+            console.log(`🎯 [CALENDAR DEBUG] Extracted from content array - ID: ${eventData.id}, URL: ${eventData.htmlLink}`);
+          }
+        } catch (error) {
+          console.log(`⚠️ [CALENDAR DEBUG] Failed to parse content array JSON:`, error);
+          // Fallback to regex extraction
+          const idMatch = firstContent.text.match(/"id":"([a-zA-Z0-9_-]+)"/);
+          if (idMatch) {
+            enhancedResult.googleCalendarId = enhancedResult.googleCalendarId || idMatch[1];
+            console.log(`🎯 [CALENDAR DEBUG] Extracted from regex - ID: ${idMatch[1]}`);
+          }
+          
+          const urlMatch = firstContent.text.match(/"htmlLink":"([^"]+)"/);
+          if (urlMatch) {
+            enhancedResult.calendarEventUrl = enhancedResult.calendarEventUrl || urlMatch[1];
+          }
+        }
+      }
+    }
+
+    // Try to extract from content if it's a string
+    if (typeof mcpResult.content === 'string') {
+      try {
+        const contentData = JSON.parse(mcpResult.content);
+        enhancedResult.googleCalendarId = enhancedResult.googleCalendarId || 
+                                         contentData.id || // Prioritize 'id' field
+                                         contentData.eventId ||
+                                         contentData.Event_ID;
+        enhancedResult.calendarEventUrl = enhancedResult.calendarEventUrl ||
+                                         contentData.htmlLink ||
+                                         contentData.html_link;
+      } catch (error) {
+        // Content is not JSON, try to extract ID with regex
+        const idMatch = mcpResult.content.match(/(?:"id"[":\s]*["']?([a-zA-Z0-9_-]+)["']?|eventId|Event_ID)[":\s]*["']?([a-zA-Z0-9_-]+)["']?/i);
+        if (idMatch) {
+          enhancedResult.googleCalendarId = enhancedResult.googleCalendarId || idMatch[1] || idMatch[2];
+        }
+        
+        const urlMatch = mcpResult.content.match(/https:\/\/calendar\.google\.com\/[^\s"']+/);
+        if (urlMatch) {
+          enhancedResult.calendarEventUrl = enhancedResult.calendarEventUrl || urlMatch[0];
+        }
+      }
+    }
+
+    console.log(`🆔 [CALENDAR DEBUG] Event ID extracted: ${enhancedResult.googleCalendarId}`);
+    console.log(`🔗 [CALENDAR DEBUG] Event URL extracted: ${enhancedResult.calendarEventUrl}`);
+    
+    return enhancedResult;
+  }
+
+  /**
    * Delete a calendar event
    */
   async deleteEvent(eventId: string): Promise<any> {
@@ -267,7 +488,7 @@ export class CalendarAgent {
       const tools = await this.getCalendarTools();
       
       if (tools.DeleteEvent) {
-        const result = await tools.DeleteEvent.execute({ eventId });
+        const result = await tools.DeleteEvent.execute({ Event_ID: eventId });
         
         console.log(`🗑️  Deleted calendar event ${eventId}:`, result);
         return result;
@@ -280,33 +501,7 @@ export class CalendarAgent {
     }
   }
 
-  /**
-   * Get all events for a specific time range
-   */
-  async getAllEvents(timeMin?: string, timeMax?: string): Promise<any> {
-    await this.initializeMCPClient();
-    
-    try {
-      const tools = await this.getCalendarTools();
-      
-      // Use SearchEvent with empty query to get all events
-      if (tools.SearchEvent) {
-        const result = await tools.SearchEvent.execute({
-          query: '',
-          timeMin,
-          timeMax
-        });
-        
-        console.log(`📋 Retrieved all calendar events for range:`, result);
-        return result;
-      } else {
-        throw new Error('SearchEvent tool not available');
-      }
-    } catch (error) {
-      console.error('❌ Error retrieving all calendar events:', error);
-      throw error;
-    }
-  }
+
 
   /**
    * Process natural language calendar requests

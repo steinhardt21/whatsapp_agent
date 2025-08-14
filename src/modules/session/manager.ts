@@ -7,6 +7,7 @@ import {
 } from '../../types.js';
 import { InMemorySessionStore, RedisSessionStore } from './store.js';
 import { getRedisClient } from './redis-client.js';
+import { getUserProfileManager } from '../user-profile/index.js';
 
 export class SessionManager {
   private store: SessionStore;
@@ -118,6 +119,14 @@ export class SessionManager {
     }
 
     await this.store.set(phoneNumber, session);
+
+    // Also save to user profile for persistent storage (49 messages max, 1 week TTL)
+    try {
+      const profileManager = getUserProfileManager();
+      await profileManager.addConversationMessage(phoneNumber, role, content, messageId);
+    } catch (error) {
+      console.error('Failed to save message to user profile:', error);
+    }
   }
 
 

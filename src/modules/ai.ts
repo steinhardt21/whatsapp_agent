@@ -5,8 +5,10 @@ import {
   mazzantiniResearchTool, 
   mazzanitniInfoTool,
   calendarTool,
+  userProfileTool,
   handleMazzantiniResearch
 } from './tools/index.js';
+import { getUserProfileManager } from './user-profile/index.js';
 
 /**
  * Get current time and day in Rome timezone
@@ -110,12 +112,49 @@ export const processUserMessage = async (
     // Get current Rome time and day
     const { currentTime, currentDay, currentDate } = getRomeTimeAndDay();
 
+    // Get user profile for context
+    const profileManager = getUserProfileManager();
+    
+    // Also get conversation history from user profile for better context
+    const persistentHistory = await profileManager.getRecentMessages(userId, 20); // Get last 20 messages
+    console.log(`📚 [AI DEBUG] Persistent conversation history: ${persistentHistory.length} messages from profile`);
+    
+    // If we have persistent history and it's more recent/complete than session history, prefer it
+    if (persistentHistory.length > conversationHistory.length) {
+      console.log(`📚 [AI DEBUG] Using persistent history (${persistentHistory.length} msgs) over session history (${conversationHistory.length} msgs)`);
+      const persistentAiHistory = persistentHistory.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }));
+      // Add current message if it's not already the last one
+      if (persistentAiHistory.length === 0 || persistentAiHistory[persistentAiHistory.length - 1].content !== userMessage) {
+        persistentAiHistory.push({ role: 'user', content: userMessage });
+      }
+      // Use persistent history for AI context
+      aiHistory.length = 0;
+      aiHistory.push(...persistentAiHistory);
+    }
+    await profileManager.updateFromConversation(userId, userMessage);
+    const userProfile = await profileManager.getProfile(userId);
+
     // Log conversation context for debugging
     console.log(`AI Context for ${userId}:`);
     console.log(`- Is first message: ${isFirstMessage}`);
     console.log(`- Previous messages: ${conversationHistory.length}`);
     console.log(`- Total AI history: ${aiHistory.length}`);
     console.log(`- Rome time: ${currentTime} (${currentDay}, ${currentDate})`);
+    console.log(`- User profile:`, {
+      name: userProfile?.name,
+      email: userProfile?.email,
+      interestLevel: userProfile?.interestLevel,
+      hasAppointment: !!userProfile?.currentAppointment,
+      appointmentDetails: userProfile?.currentAppointment ? {
+        id: userProfile.currentAppointment.googleCalendarId || userProfile.currentAppointment.eventId,
+        title: userProfile.currentAppointment.title,
+        scheduledFor: userProfile.currentAppointment.scheduledFor,
+        status: userProfile.currentAppointment.status
+      } : null
+    });
     if (conversationHistory.length > 0) {
       console.log('- Last few messages:', conversationHistory.slice(-3).map(m => `${m.role}: "${m.content}"`));
     }
@@ -132,68 +171,16 @@ export const processUserMessage = async (
     const { text } = await generateText({
       model: anthropic('claude-3-5-sonnet-20240620'),
       maxSteps: 5,
-      system: `<role>
-Sei l'assistente virtuale di Mazzantini&Associati ("Assistente Mazzantini&Associati"). Aiuti a rispondere a domande, a pianificare eventi su Google Calendar e a identificare opportunità commerciali per Mazzantini&Associati.
-</role>
+      system: `🚨 MANDATORY RULE: For calendar operations (create/delete/modify), you MUST call calendarManagement tool FIRST. NEVER fake calendar actions!
 
-<brand_voice>
-- Identità: Assistente Mazzantini&Associati.
-- Tono: chiaro, professionale, cordiale.
-- Stile: messaggi brevi, un solo concetto per messaggio.
-</brand_voice>
+You are Mazzantini&Associati assistant. Answer in Italian, be friendly and professional.
 
-<initial_message_detection>
-Considera "messaggio iniziale" quando:
-- È il primo messaggio della conversazione, oppure
-- Il messaggio contiene saluti generici (es. "ciao", "buongiorno", "salve", "buonasera").
-In questi casi APRI sempre con: "Ciao, sono l'assistente di Mazzantini Associati. Come posso esserti utile?"
-</initial_message_detection>
+USER: ${userId}
+PROFILE: ${userProfile ? `Nome: ${userProfile.name || 'N/A'}, Email: ${userProfile.email || 'N/A'}, Appuntamento: ${userProfile.currentAppointment ? 'Sì' : 'No'}` : 'Nessuno'}
 
-<service_intent_detection>
-<when_to_detect>
-Rileva interesse per servizi quando l'utente:
-- Chiede esplicitamente un servizio (es. "potete fare siti web?", "offrite consulenze?")
-- Esprime un bisogno aziendale (es. "ho bisogno di marketing", "cerco aiuto per...")
-- Domanda sui vostri servizi (es. "cosa fate?", "di cosa vi occupate?")
-- Mostra interesse commerciale (es. "quanto costa...", "come funziona...")
-</when_to_detect>
+For greetings: "Ciao, sono l'assistente di Mazzantini Associati. Come posso esserti utile?"
 
-<appointment_proposal>
-Quando rilevi interesse per un servizio:
-1. Rispondi brevemente alla domanda
-2. SEMPRE proponi un appuntamento con questa formula:
-   "Vuoi fissare una consulenza per approfondire? Posso prenotarti un appuntamento."
-3. Attendi la risposta dell'utente prima di procedere
-</appointment_proposal>
-</service_intent_detection>
-
-    <tools_usage>
-Hai accesso ai seguenti strumenti per ricerca dettagliata:
-- mazzantiniResearch: STRUMENTO PRINCIPALE - Usa questo per qualsiasi domanda dettagliata su Mazzantini & Associati: servizi, storia, team, approccio AI, Web3, filosofia aziendale. Fornisce risposte complete e contestualizzate.
-- mazzanitniInfo: Strumento legacy per informazioni base sulla creazione dell'azienda (30 anni fa).
-- calendarManagement: GESTIONE CALENDARIO - Usa questo per qualsiasi richiesta relativa a calendario, appuntamenti, eventi, gestione del tempo.
-
-QUANDO USARE mazzantiniResearch:
-- Domande sui servizi (digital marketing, eventi, grafica, Web3, AI)
-- Informazioni su team e competenze
-- Storia e filosofia aziendale  
-- Approccio all'intelligenza artificiale
-- Servizi blockchain, NFT, metaverso
-- Comunicazione Integrata Multicanale©
-- Qualsiasi domanda specifica sull'agenzia
-
-QUANDO USARE calendarManagement:
-- Creare appuntamenti o eventi
-- Cercare appuntamenti esistenti
-- Modificare o cancellare eventi
-- Visualizzare il calendario
-- Qualsiasi richiesta che coinvolge date, orari, programmazione
-
-SEMPRE delegare a mazzantiniResearch per domande sostanziali su Mazzantini & Associati.
-SEMPRE delegare a calendarManagement per richieste di calendario.
-
-NOTA: Il sistema è stato aggiornato per utilizzare programmazione funzionale pura per migliori performance e testabilità.
-</tools_usage>
+Calendar requests: ALWAYS call calendarManagement(action: "create|delete|search", phoneNumber: "${userId}", userRequest: "user's message")
 
 <whatsapp_message_rules>
 <length>Scrivi messaggi BREVI ma completi</length>
@@ -206,15 +193,67 @@ NOTA: Il sistema è stato aggiornato per utilizzare programmazione funzionale pu
 <context>
 Stai comunicando via WhatsApp. ${isFirstMessage ? 'Questo è il primo messaggio della conversazione.' : `Hai già scambiato ${conversationHistory.length} messaggi con questo utente. Puoi vedere la cronologia completa dei messaggi precedenti per mantenere il contesto.`}
 
+NUMERO TELEFONO UTENTE: ${userId}
 ORARIO ATTUALE: ${currentTime} di ${currentDay}, ${currentDate} (fuso orario di Roma)
 
-IMPORTANTE: Hai accesso alla cronologia completa della conversazione e all'orario attuale. Usa sempre le informazioni precedenti per dare risposte coerenti e contestuali. Se l'utente chiede l'ora o informazioni temporali, usa l'orario di Roma fornito.
+PROFILO UTENTE CORRENTE:
+${userProfile ? `
+- Nome: ${userProfile.name || 'Non disponibile'}
+- Email: ${userProfile.email || 'Non disponibile'}
+- Livello interesse: ${userProfile.interestLevel || 'Sconosciuto'}
+- Servizi di interesse: ${userProfile.serviceInterests?.join(', ') || 'Nessuno'}
+- Appuntamento attivo: ${userProfile.currentAppointment ? `Sì - ${userProfile.currentAppointment.title} il ${userProfile.currentAppointment.scheduledFor}` : 'No'}
+${userProfile.currentAppointment ? `- ID Evento Google Calendar: ${userProfile.currentAppointment.googleCalendarId || 'Non disponibile'}
+- Status appuntamento: ${userProfile.currentAppointment.status || 'Non disponibile'}
+- Durata: ${userProfile.currentAppointment.duration || 60} minuti` : ''}
+- Profilo completato: ${Math.round((userProfile.completionPercentage || 0) * 100)}%
+` : 'Nessun profilo disponibile'}
+
+REGOLE INTELLIGENTI PER RACCOLTA DATI:
+🧠 PRIMA DI CHIEDERE INFORMAZIONI, CONTROLLA SEMPRE IL PROFILO UTENTE:
+
+1. NOME:
+   - SE già presente nel profilo → NON chiedere di nuovo
+   - SE mancante → "Per fissare l'appuntamento, mi serve il tuo nome"
+   - ⚠️ IMPORTANTE: Chiedi solo "nome", MAI "nome completo" o "nome e cognome"
+   - 🧠 ESTRAZIONE INTELLIGENTE: Quando l'utente fornisce il nome in qualsiasi forma:
+     * "il mio nome e' Alex" → usa updateUserProfile con name: "Alex"
+     * "Alex Enache" → usa updateUserProfile con name: "Alex Enache"  
+     * "sono Marco" → usa updateUserProfile con name: "Marco"
+   - ✅ SEMPRE chiamare updateUserProfile quando rilevi un nome nella conversazione
+   - 📢 DOPO aver salvato: conferma con "Perfetto, [Nome]! Ho aggiornato il tuo profilo."
+
+2. EMAIL:
+   - SE già presente e valida nel profilo → NON chiedere di nuovo, USALA direttamente
+   - SE mancante o non valida → "Per inviarti l'invito, mi serve il tuo indirizzo email"
+
+3. DETTAGLI MEETING:
+   - Chiedi sempre cosa vuole discutere durante l'incontro
+   - Salva nel profilo per preparazione
+
+4. APPUNTAMENTI:
+   - SE ha già un appuntamento attivo → offri cancellazione/riprogrammazione
+   - SE non ha appuntamenti → procedi normalmente
+
+IMPORTANTE: 
+- Hai accesso alla cronologia completa della conversazione e all'orario attuale
+- Il numero di telefono dell'utente è ${userId} - usa questo come parametro phoneNumber negli strumenti
+- USA SEMPRE i dati esistenti del profilo per evitare domande ripetitive
+- Personalizza le risposte con le informazioni che già conosci
+- Se l'utente chiede l'ora o informazioni temporali, usa l'orario di Roma fornito
+
+ESPERIENZA UTENTE MIGLIORATA:
+- Non ripetere domande per informazioni già disponibili
+- Usa il nome dell'utente quando lo conosci
+- Riferisciti ai suoi interessi precedenti quando appropriato
+- Mantieni coerenza con le informazioni salvate
 </context>`,
       messages: aiHistory,
       tools: {
         mazzantiniResearch: mazzantiniResearchTool,
         mazzanitniInfo: mazzanitniInfoTool,
         calendarManagement: calendarTool,
+        updateUserProfile: userProfileTool,
       },
       abortSignal // Pass abort signal to AI generation
     });

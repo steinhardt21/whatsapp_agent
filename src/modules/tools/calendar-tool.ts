@@ -1,6 +1,9 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { calendarAgent } from '../agents/calendar-agent.js';
+import { extractEmailsFromText, isValidEmail, validateAndFormatEmail } from '../../utils/validation.js';
+import { getUserProfileManager } from '../user-profile/manager.js';
+import { AppointmentInfo, AppointmentStatus } from '../user-profile/types.js';
 
 /**
  * Calendar Management Tool for the AI Assistant
@@ -26,9 +29,11 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
       'update', 
       'delete', 
       'get_all',
-      'process_request'
+      'process_request',
+      'check_availability'
     ]).describe('Tipo di operazione da eseguire sul calendario'),
     
+    phoneNumber: z.string().describe('Numero di telefono dell\'utente (per gestione profilo)'),
     userRequest: z.string().optional().describe('Richiesta originale dell\'utente in linguaggio naturale'),
     
     // For search operations
@@ -60,6 +65,7 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
 
   execute: async ({ 
     action, 
+    phoneNumber,
     userRequest, 
     query, 
     timeMin, 
@@ -71,9 +77,10 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
     const startTime = Date.now();
     
     try {
-      console.log(`📅 [CALENDAR TOOL DEBUG] Calendar tool executing action: ${action}`);
+      console.log(`📅 [CALENDAR TOOL DEBUG] Calendar tool executing action: ${action} for user ${phoneNumber}`);
       console.log(`📅 [CALENDAR TOOL DEBUG] Tool parameters:`, {
         action,
+        phoneNumber,
         userRequest,
         query,
         timeMin,
@@ -81,6 +88,33 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
         eventData,
         eventId
       });
+
+      // Get user profile manager
+      const profileManager = getUserProfileManager();
+      
+      // Get user profile and extract email for event filtering
+      await profileManager.updateFromConversation(phoneNumber, userRequest || '');
+      const currentProfile = await profileManager.getProfile(phoneNumber);
+      
+      // Extract emails from multiple sources
+      let userEmail: string | null = null;
+      
+      // 1. First, try user profile
+      if (currentProfile?.email && isValidEmail(currentProfile.email)) {
+        userEmail = currentProfile.email;
+        console.log(`📧 [CALENDAR TOOL DEBUG] Using email from user profile: ${userEmail}`);
+      }
+      
+      // 2. Try to extract from userRequest
+      if (!userEmail && userRequest) {
+        console.log(`📧 [CALENDAR TOOL DEBUG] Extracting emails from user request: "${userRequest}"`);
+        const extractedEmails = extractEmailsFromText(userRequest);
+        console.log(`📧 [CALENDAR TOOL DEBUG] Extracted emails from userRequest:`, extractedEmails);
+        if (extractedEmails.length > 0) {
+          userEmail = validateAndFormatEmail(extractedEmails[0]);
+          console.log(`📧 [CALENDAR TOOL DEBUG] Valid user email found in userRequest: ${userEmail}`);
+        }
+      }
       
       // Check if calendar agent is ready
       console.log(`🔍 [CALENDAR TOOL DEBUG] Checking if calendar agent is ready...`);
@@ -88,14 +122,85 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
       console.log(`🎯 [CALENDAR TOOL DEBUG] Calendar agent ready: ${isReady}`);
       
       if (!isReady) {
-        console.warn(`⚠️ [CALENDAR TOOL DEBUG] Calendar agent not ready, returning error response`);
-        return {
-          success: false,
-          message: "Il servizio calendario non è al momento disponibile. Riprova più tardi."
-        };
+        console.warn(`⚠️ [CALENDAR TOOL DEBUG] Calendar agent not ready, providing fallback response`);
+        
+        // Provide helpful fallback message based on the action
+        switch (action) {
+          case 'check_availability':
+          case 'search':
+            return {
+              success: false,
+              message: "🔧 Il sistema di gestione del calendario non è al momento disponibile (errore di connessione al server). Posso comunque prendere nota della tua richiesta di appuntamento per lunedì alle 16:00 e confermarla appena il servizio sarà attivo. Vuoi procedere?",
+              fallbackMode: true,
+              suggestedAction: 'manual_booking',
+              action: action,
+              serverStatus: 'mcp_server_unavailable_404'
+            };
+            
+          case 'create':
+            return {
+              success: false,
+              message: "🔧 Il sistema di gestione del calendario non è al momento disponibile (errore di connessione al server). Ho preso nota della tua richiesta di appuntamento e ti contatteremo appena possibile per confermare la disponibilità.",
+              fallbackMode: true,
+              action: action,
+              serverStatus: 'mcp_server_unavailable_404'
+            };
+            
+          default:
+            return {
+              success: false,
+              message: "🔧 Il sistema di gestione del calendario non è al momento disponibile (errore di connessione al server). Riprova tra qualche minuto o contattaci direttamente.",
+              action: action,
+              serverStatus: 'mcp_server_unavailable_404'
+            };
+        }
       }
 
       switch (action) {
+        case 'check_availability':
+          // Check user's current appointment status
+          const userProfile = await profileManager.getProfile(phoneNumber);
+          const canSchedule = await profileManager.canScheduleAppointment(phoneNumber);
+          
+          if (!canSchedule.canSchedule) {
+            return {
+              success: false,
+              message: canSchedule.reason,
+              currentAppointment: userProfile?.currentAppointment,
+              hasExistingAppointment: true
+            };
+          }
+          
+          // If user can schedule, check calendar availability by searching their events
+          let availabilityResults;
+          if (userEmail) {
+            console.log(`🔍 [CALENDAR TOOL DEBUG] Checking availability for user email: ${userEmail}`);
+            availabilityResults = await calendarAgent.searchUserEvents(
+              userEmail,
+              timeMin || new Date().toISOString(), 
+              timeMax || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() // Next 7 days
+            );
+          } else {
+            console.log(`🔍 [CALENDAR TOOL DEBUG] No user email - checking general availability`);
+            availabilityResults = await calendarAgent.searchEvents(
+              '', 
+              timeMin || new Date().toISOString(), 
+              timeMax || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() // Next 7 days
+            );
+          }
+          
+          return {
+            success: true,
+            message: "L'utente può fissare un nuovo appuntamento",
+            canSchedule: true,
+            existingEvents: availabilityResults,
+            userProfile: {
+              name: userProfile?.name,
+              email: userProfile?.email,
+              interestLevel: userProfile?.interestLevel
+            }
+          };
+
         case 'process_request':
           if (!userRequest) {
             return {
@@ -112,17 +217,32 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
           };
 
         case 'search':
-          const searchResults = await calendarAgent.searchEvents(
-            query || '', 
-            timeMin, 
-            timeMax
-          );
+          // Search for events where the user is an attendee
+          let searchResults;
+          if (userEmail) {
+            console.log(`🔍 [CALENDAR TOOL DEBUG] Searching events for user email: ${userEmail}`);
+            searchResults = await calendarAgent.searchUserEvents(
+              userEmail,
+              timeMin, 
+              timeMax
+            );
+          } else {
+            console.log(`🔍 [CALENDAR TOOL DEBUG] No user email - searching all events`);
+            searchResults = await calendarAgent.searchEvents(
+              query || '', 
+              timeMin, 
+              timeMax
+            );
+          }
           
           return {
             success: true,
             data: searchResults,
-            message: `Ricerca completata${query ? ` per "${query}"` : ''}`,
-            action: 'search'
+            message: userEmail 
+              ? `Trovati ${searchResults?.events?.length || 0} tuoi appuntamenti nel calendario`
+              : `Ricerca completata${query ? ` per "${query}"` : ''}`,
+            action: 'search',
+            userEmail: userEmail
           };
 
         case 'get_all':
@@ -140,7 +260,19 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
           };
 
         case 'create':
-          console.log(`📅 [CALENDAR TOOL DEBUG] Processing 'create' action`);
+          console.log(`📅 [CALENDAR TOOL DEBUG] Processing 'create' action for ${phoneNumber}`);
+          
+          // First check if user can schedule an appointment
+          const canUserSchedule = await profileManager.canScheduleAppointment(phoneNumber);
+          if (!canUserSchedule.canSchedule) {
+            console.log(`⚠️ [CALENDAR TOOL DEBUG] User ${phoneNumber} cannot schedule: ${canUserSchedule.reason}`);
+            return {
+              success: false,
+              message: canUserSchedule.reason,
+              needsReschedule: true
+            };
+          }
+          
           if (!eventData) {
             console.error(`❌ [CALENDAR TOOL DEBUG] Missing event data for creation`);
             return {
@@ -150,6 +282,56 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
           }
           
           console.log(`📅 [CALENDAR TOOL DEBUG] Original event data:`, eventData);
+          
+          // Check if eventData already has attendees with email (fallback)
+          if (!userEmail && eventData.attendees && eventData.attendees.length > 0) {
+            const attendeeEmail = eventData.attendees[0]?.email;
+            console.log(`📧 [CALENDAR TOOL DEBUG] Checking attendee email from eventData: "${attendeeEmail}"`);
+            
+            if (attendeeEmail && isValidEmail(attendeeEmail)) {
+              userEmail = validateAndFormatEmail(attendeeEmail);
+              console.log(`📧 [CALENDAR TOOL DEBUG] Valid user email found in eventData: ${userEmail}`);
+            }
+          }
+          
+          // Check if we have essential information
+          const missingInfo = [];
+          
+          if (!userEmail) {
+            missingInfo.push('email');
+          }
+          
+          if (!currentProfile?.name) {
+            missingInfo.push('nome');
+          }
+          
+          if (missingInfo.length > 0) {
+            console.log(`⚠️ [CALENDAR TOOL DEBUG] Missing information:`, missingInfo);
+            console.log(`📋 [CALENDAR TOOL DEBUG] Current profile:`, {
+              name: currentProfile?.name,
+              email: currentProfile?.email
+            });
+            
+            return {
+              success: false,
+              message: `ATTENZIONE AI: Informazioni mancanti per l'appuntamento. Controlla PROFILO UTENTE CORRENTE nella tua configurazione. Richiedi solo: ${missingInfo.join(', ')}. NON chiedere "nome completo", chiedi solo "nome".`,
+              missingInformation: missingInfo,
+              needsEmail: missingInfo.includes('email'),
+              needsName: missingInfo.includes('nome'),
+              action: 'create',
+              userProfile: {
+                name: currentProfile?.name,
+                email: currentProfile?.email,
+                completionPercentage: Math.round((currentProfile?.completionPercentage || 0) * 100)
+              }
+            };
+          }
+          
+          // Positive confirmation when profile is complete
+          console.log(`✅ [CALENDAR TOOL DEBUG] All required information available:`);
+          console.log(`✅ [CALENDAR TOOL DEBUG] - Name: ${currentProfile?.name || 'Non disponibile'}`);
+          console.log(`✅ [CALENDAR TOOL DEBUG] - Email: ${userEmail}`);
+          console.log(`✅ [CALENDAR TOOL DEBUG] - Profile completion: ${Math.round((currentProfile?.completionPercentage || 0) * 100)}%`);
           
           // Set default timezone if not provided
           if (!eventData.start.timeZone) {
@@ -161,11 +343,9 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
             console.log(`🌍 [CALENDAR TOOL DEBUG] Set default end timezone: Europe/Rome`);
           }
           
-          // Ensure attendees array exists (required by MCP server)
-          if (!eventData.attendees || eventData.attendees.length === 0) {
-            eventData.attendees = [{ email: 'info@mazzantiniassociati.com' }];
-            console.log(`👥 [CALENDAR TOOL DEBUG] Set default attendee: info@mazzantiniassociati.com`);
-          }
+          // Set primary attendee to user's email
+          eventData.attendees = [{ email: userEmail! }]; // userEmail is guaranteed to be non-null at this point
+          console.log(`👥 [CALENDAR TOOL DEBUG] Set primary attendee to user email: ${userEmail}`);
           
           console.log(`📅 [CALENDAR TOOL DEBUG] Final event data before creation:`, eventData);
           console.log(`🚀 [CALENDAR TOOL DEBUG] Calling calendarAgent.createEvent...`);
@@ -175,11 +355,65 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
           console.log(`✅ [CALENDAR TOOL DEBUG] Event creation completed successfully`);
           console.log(`📥 [CALENDAR TOOL DEBUG] Created event response:`, createdEvent);
           
+          // Extract meeting notes from user request
+          const meetingNotes = profileManager.extractMeetingNotes(userRequest || '');
+          
+          // Debug logging for Google Calendar ID extraction
+          console.log(`🔍 [CALENDAR TOOL DEBUG] Checking extracted calendar IDs:`);
+          console.log(`🔍 [CALENDAR TOOL DEBUG] - eventId: ${createdEvent.eventId}`);
+          console.log(`🔍 [CALENDAR TOOL DEBUG] - googleCalendarId: ${createdEvent.googleCalendarId}`);
+          console.log(`🔍 [CALENDAR TOOL DEBUG] - calendarEventUrl: ${createdEvent.calendarEventUrl}`);
+
+          // Save appointment to user profile with comprehensive details including Google Calendar ID
+          const appointmentInfo: Omit<AppointmentInfo, 'createdAt'> = {
+            // Calendar event IDs for future reference
+            eventId: createdEvent.eventId || undefined, // MCP server event ID
+            googleCalendarId: createdEvent.googleCalendarId || undefined, // Google Calendar event ID
+            calendarEventUrl: createdEvent.calendarEventUrl || undefined, // Google Calendar event URL
+            
+            title: eventData.summary,
+            description: eventData.description || '',
+            scheduledFor: new Date(eventData.start.dateTime),
+            duration: Math.round((new Date(eventData.end.dateTime).getTime() - new Date(eventData.start.dateTime).getTime()) / (1000 * 60)),
+            status: AppointmentStatus.SCHEDULED,
+            
+            // Meeting preparation details
+            meetingNotes: meetingNotes || 'Consulenza generale',
+            contactName: currentProfile?.name || 'Cliente',
+            contactEmail: userEmail || undefined,
+            
+            // Extract any specific questions or requests from the conversation
+            preparationNotes: `Cliente interessato in: ${currentProfile?.serviceInterests.join(', ') || 'servizi generali'}. Livello interesse: ${currentProfile?.interestLevel || 'unknown'}.`
+          };
+          
+          const updatedProfile = await profileManager.setAppointment(phoneNumber, appointmentInfo);
+          console.log(`👤 [CALENDAR TOOL DEBUG] Updated user profile with appointment for ${phoneNumber}`);
+          
           return {
             success: true,
             data: createdEvent,
-            message: `Evento "${eventData.summary}" creato con successo`,
-            action: 'create'
+            message: `Evento "${eventData.summary}" creato con successo. L'invito è stato inviato a ${userEmail}`,
+            action: 'create',
+            userEmail: userEmail,
+            // Google Calendar integration details
+            calendarIntegration: {
+              eventId: appointmentInfo.eventId,
+              googleCalendarId: appointmentInfo.googleCalendarId,
+              calendarEventUrl: appointmentInfo.calendarEventUrl,
+              canUpdate: !!appointmentInfo.googleCalendarId,
+              canDelete: !!appointmentInfo.googleCalendarId
+            },
+            userProfile: {
+              name: updatedProfile.name,
+              email: updatedProfile.email,
+              interestLevel: updatedProfile.interestLevel,
+              appointmentScheduled: true,
+              meetingDetails: {
+                contactName: appointmentInfo.contactName,
+                meetingNotes: appointmentInfo.meetingNotes,
+                preparationNotes: appointmentInfo.preparationNotes
+              }
+            }
           };
 
         case 'update':
@@ -207,12 +441,33 @@ Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, ev
             };
           }
           
-          await calendarAgent.deleteEvent(eventId);
+          // First, try to find the appointment by Google Calendar ID in our system
+          const appointmentResult = await profileManager.findAppointmentByGoogleCalendarId(eventId);
+          if (appointmentResult) {
+            console.log(`📅 [CALENDAR TOOL DEBUG] Found appointment to delete for user ${appointmentResult.profile.phoneNumber}`);
+          }
+
+          const deletedEvent = await calendarAgent.deleteEvent(eventId);
+          
+          // Cancel appointment in user profile
+          const cancelledProfile = await profileManager.cancelAppointment(phoneNumber, 'Evento cancellato tramite sistema');
+          console.log(`👤 [CALENDAR TOOL DEBUG] Cancelled appointment in user profile for ${phoneNumber}`);
           
           return {
             success: true,
+            data: deletedEvent,
             message: `Evento ${eventId} cancellato con successo`,
-            action: 'delete'
+            action: 'delete',
+            calendarIntegration: {
+              googleCalendarId: eventId,
+              appointmentFound: !!appointmentResult,
+              userAffected: appointmentResult?.profile.phoneNumber
+            },
+            userProfile: {
+              name: cancelledProfile?.name,
+              email: cancelledProfile?.email,
+              hasAppointment: false
+            }
           };
 
         default:
