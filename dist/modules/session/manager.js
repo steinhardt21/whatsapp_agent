@@ -142,6 +142,26 @@ export class SessionManager {
         return key ? session.state.context[key] : session.state.context;
     }
     /**
+     * Remove the last message of a specific role from conversation history
+     */
+    async removeLastMessage(phoneNumber, role) {
+        const session = await this.store.get(phoneNumber);
+        if (!session || session.conversationHistory.length === 0) {
+            return false;
+        }
+        // Find the last message with the specified role
+        for (let i = session.conversationHistory.length - 1; i >= 0; i--) {
+            if (session.conversationHistory[i].role === role) {
+                session.conversationHistory.splice(i, 1);
+                session.state.messageCount = Math.max(0, session.state.messageCount - 1);
+                await this.store.set(phoneNumber, session);
+                console.log(`Removed last ${role} message from conversation history for ${phoneNumber}`);
+                return true;
+            }
+        }
+        return false; // No message with specified role found
+    }
+    /**
      * Clear conversation history for a user
      */
     async clearConversationHistory(phoneNumber) {

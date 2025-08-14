@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { 
   mazzantiniResearchTool, 
   mazzanitniInfoTool,
+  calendarTool,
   handleMazzantiniResearch
 } from './tools/index.js';
 
@@ -127,6 +128,7 @@ export const processUserMessage = async (
     }
     
     // Generate AI response with Mazzantini&Associati system prompt
+    console.log(`🤖 [AI DEBUG] Starting AI generation for user ${userId} with message: "${userMessage}"`);
     const { text } = await generateText({
       model: anthropic('claude-3-5-sonnet-20240620'),
       maxSteps: 5,
@@ -169,6 +171,7 @@ Quando rilevi interesse per un servizio:
 Hai accesso ai seguenti strumenti per ricerca dettagliata:
 - mazzantiniResearch: STRUMENTO PRINCIPALE - Usa questo per qualsiasi domanda dettagliata su Mazzantini & Associati: servizi, storia, team, approccio AI, Web3, filosofia aziendale. Fornisce risposte complete e contestualizzate.
 - mazzanitniInfo: Strumento legacy per informazioni base sulla creazione dell'azienda (30 anni fa).
+- calendarManagement: GESTIONE CALENDARIO - Usa questo per qualsiasi richiesta relativa a calendario, appuntamenti, eventi, gestione del tempo.
 
 QUANDO USARE mazzantiniResearch:
 - Domande sui servizi (digital marketing, eventi, grafica, Web3, AI)
@@ -179,7 +182,15 @@ QUANDO USARE mazzantiniResearch:
 - Comunicazione Integrata Multicanale©
 - Qualsiasi domanda specifica sull'agenzia
 
+QUANDO USARE calendarManagement:
+- Creare appuntamenti o eventi
+- Cercare appuntamenti esistenti
+- Modificare o cancellare eventi
+- Visualizzare il calendario
+- Qualsiasi richiesta che coinvolge date, orari, programmazione
+
 SEMPRE delegare a mazzantiniResearch per domande sostanziali su Mazzantini & Associati.
+SEMPRE delegare a calendarManagement per richieste di calendario.
 
 NOTA: Il sistema è stato aggiornato per utilizzare programmazione funzionale pura per migliori performance e testabilità.
 </tools_usage>
@@ -203,11 +214,13 @@ IMPORTANTE: Hai accesso alla cronologia completa della conversazione e all'orari
       tools: {
         mazzantiniResearch: mazzantiniResearchTool,
         mazzanitniInfo: mazzanitniInfoTool,
+        calendarManagement: calendarTool,
       },
       abortSignal // Pass abort signal to AI generation
     });
     
-    console.log(`AI response for ${userId}: "${text}"`);
+    console.log(`🤖 [AI DEBUG] AI generation completed for ${userId}`);
+    console.log(`📤 [AI DEBUG] AI response for ${userId}: "${text}"`);
     return text;
     
   } catch (error) {

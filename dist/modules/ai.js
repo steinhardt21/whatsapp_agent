@@ -1,9 +1,7 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { generateText } from 'ai';
 import { config } from '../config.js';
-import { mazzantiniResearchTool, mazzanitniInfoTool } from './tools/index.js';
-import { RedisMessageTracker, messageTrackingConfig } from './message-tracking/index.js';
-import { getRedisClient } from './session/redis-client.js';
+import { mazzantiniResearchTool, mazzanitniInfoTool, calendarTool } from './tools/index.js';
 /**
  * Get current time and day in Rome timezone
  */
@@ -33,17 +31,6 @@ const getRomeTimeAndDay = () => {
 };
 // Message history storage (in a real app, use a database)
 const conversationHistory = new Map();
-// Initialize message tracker for enhanced context
-let messageTracker = null;
-async function getMessageTracker() {
-    if (!messageTracker) {
-        const redisClient = await getRedisClient();
-        if (redisClient) {
-            messageTracker = new RedisMessageTracker(redisClient, messageTrackingConfig);
-        }
-    }
-    return messageTracker;
-}
 /**
  * Get conversation history for a user
  */
@@ -67,32 +54,25 @@ const addToHistory = (userId, role, content) => {
 /**
  * Process user message with AI agent using session memory
  */
-export const processUserMessage = async (userId, userMessage, conversationHistory = [], isFirstMessage = false) => {
+export const processUserMessage = async (userId, userMessage, conversationHistory = [], isFirstMessage = false, abortSignal) => {
     try {
+        // Check for abort at the start
+        if (abortSignal?.aborted) {
+            const error = new Error('Processing aborted before AI call');
+            error.name = 'AbortError';
+            throw error;
+        }
         console.log(`Processing message from ${userId}: "${userMessage}"`);
         // Check if Anthropic API key is configured
         if (!config.ANTHROPIC_API_KEY) {
             console.warn('Anthropic API key not configured, using fallback response');
             return `Ciao, sono l'assistente di Mazzantini Associati. Al momento l'AI non è configurata. Come posso esserti utile?`;
         }
-        // Get enhanced user context
-        const tracker = await getMessageTracker();
-        let userContext = '';
-        if (tracker) {
-            const contextData = await tracker.getUserContext(userId);
-            if (contextData) {
-                userContext = `
-<user_context>
-  <phone_number>${contextData.phoneNumber}</phone_number>
-  <display_name>${contextData.displayName || 'Non fornito'}</display_name>
-  <message_count>${contextData.messageCount}</message_count>
-  <last_active>${contextData.lastActiveAt.toISOString()}</last_active>
-  <preferred_language>${contextData.contextData.preferredLanguage || 'italiano'}</preferred_language>
-  <conversation_summary>${contextData.conversationSummary || 'Nuova conversazione'}</conversation_summary>
-  <topics_discussed>${contextData.contextData.topics.join(', ') || 'Nessuno ancora'}</topics_discussed>
-  <last_services_mentioned>${contextData.contextData.lastMentionedServices.join(', ') || 'Nessuno'}</last_services_mentioned>
-</user_context>`;
-            }
+        // Check for abort before building history
+        if (abortSignal?.aborted) {
+            const error = new Error('Processing aborted before building conversation history');
+            error.name = 'AbortError';
+            throw error;
         }
         // Convert session history to AI format
         const aiHistory = conversationHistory.map(msg => ({
@@ -112,7 +92,14 @@ export const processUserMessage = async (userId, userMessage, conversationHistor
         if (conversationHistory.length > 0) {
             console.log('- Last few messages:', conversationHistory.slice(-3).map(m => `${m.role}: "${m.content}"`));
         }
+        // Check for abort before AI call
+        if (abortSignal?.aborted) {
+            const error = new Error('Processing aborted before AI generation');
+            error.name = 'AbortError';
+            throw error;
+        }
         // Generate AI response with Mazzantini&Associati system prompt
+        console.log(`🤖 [AI DEBUG] Starting AI generation for user ${userId} with message: "${userMessage}"`);
         const { text } = await generateText({
             model: anthropic('claude-3-5-sonnet-20240620'),
             maxSteps: 5,
@@ -155,6 +142,7 @@ Quando rilevi interesse per un servizio:
 Hai accesso ai seguenti strumenti per ricerca dettagliata:
 - mazzantiniResearch: STRUMENTO PRINCIPALE - Usa questo per qualsiasi domanda dettagliata su Mazzantini & Associati: servizi, storia, team, approccio AI, Web3, filosofia aziendale. Fornisce risposte complete e contestualizzate.
 - mazzanitniInfo: Strumento legacy per informazioni base sulla creazione dell'azienda (30 anni fa).
+- calendarManagement: GESTIONE CALENDARIO - Usa questo per qualsiasi richiesta relativa a calendario, appuntamenti, eventi, gestione del tempo.
 
 QUANDO USARE mazzantiniResearch:
 - Domande sui servizi (digital marketing, eventi, grafica, Web3, AI)
@@ -165,13 +153,21 @@ QUANDO USARE mazzantiniResearch:
 - Comunicazione Integrata Multicanale©
 - Qualsiasi domanda specifica sull'agenzia
 
+QUANDO USARE calendarManagement:
+- Creare appuntamenti o eventi
+- Cercare appuntamenti esistenti
+- Modificare o cancellare eventi
+- Visualizzare il calendario
+- Qualsiasi richiesta che coinvolge date, orari, programmazione
+
 SEMPRE delegare a mazzantiniResearch per domande sostanziali su Mazzantini & Associati.
+SEMPRE delegare a calendarManagement per richieste di calendario.
 
 NOTA: Il sistema è stato aggiornato per utilizzare programmazione funzionale pura per migliori performance e testabilità.
 </tools_usage>
 
 <whatsapp_message_rules>
-<length>Scrivi messaggi BREVI (massimo 25-30 parole totali)</length>
+<length>Scrivi messaggi BREVI ma completi</length>
 <sentences>Usa frasi semplici che terminano con punti</sentences>
 <formatting>NESSUN simbolo di formattazione (* ** • etc.) - solo testo normale</formatting>
 <emojis>Usa emoji solo alla fine delle frasi</emojis>
@@ -183,17 +179,18 @@ Stai comunicando via WhatsApp. ${isFirstMessage ? 'Questo è il primo messaggio 
 
 ORARIO ATTUALE: ${currentTime} di ${currentDay}, ${currentDate} (fuso orario di Roma)
 
-${userContext}
-
-IMPORTANTE: Hai accesso alla cronologia completa della conversazione, al contesto utente e all'orario attuale. Usa sempre le informazioni precedenti per dare risposte coerenti e contestuali. Se l'utente chiede l'ora o informazioni temporali, usa l'orario di Roma fornito. Se hai informazioni sul nome utente o altre informazioni personali, usale per personalizzare la risposta.
+IMPORTANTE: Hai accesso alla cronologia completa della conversazione e all'orario attuale. Usa sempre le informazioni precedenti per dare risposte coerenti e contestuali. Se l'utente chiede l'ora o informazioni temporali, usa l'orario di Roma fornito.
 </context>`,
             messages: aiHistory,
             tools: {
                 mazzantiniResearch: mazzantiniResearchTool,
                 mazzanitniInfo: mazzanitniInfoTool,
-            }
+                calendarManagement: calendarTool,
+            },
+            abortSignal // Pass abort signal to AI generation
         });
-        console.log(`AI response for ${userId}: "${text}"`);
+        console.log(`🤖 [AI DEBUG] AI generation completed for ${userId}`);
+        console.log(`📤 [AI DEBUG] AI response for ${userId}: "${text}"`);
         return text;
     }
     catch (error) {

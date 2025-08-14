@@ -12,7 +12,8 @@ const createProcessingState = (phoneNumber: string): ProcessingState => ({
   isProcessing: false,
   pendingMessages: [],
   lastMessageAt: new Date(),
-  shouldRestart: false
+  shouldRestart: false,
+  processingGeneration: 1
 });
 
 /**
