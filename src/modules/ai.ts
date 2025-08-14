@@ -1,6 +1,11 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { generateText } from 'ai';
 import { config } from '../config.js';
+import { 
+  mazzantiniResearchTool, 
+  mazzanitniInfoTool,
+  handleMazzantiniResearch
+} from './tools/index.js';
 
 /**
  * Get current time and day in Rome timezone
@@ -102,6 +107,7 @@ export const processUserMessage = async (
     // Generate AI response with Mazzantini&Associati system prompt
     const { text } = await generateText({
       model: anthropic('claude-3-5-sonnet-20240620'),
+      maxSteps: 5,
       system: `<role>
 Sei l'assistente virtuale di Mazzantini&Associati ("Assistente Mazzantini&Associati"). Aiuti a rispondere a domande, a pianificare eventi su Google Calendar e a identificare opportunità commerciali per Mazzantini&Associati.
 </role>
@@ -137,6 +143,25 @@ Quando rilevi interesse per un servizio:
 </appointment_proposal>
 </service_intent_detection>
 
+    <tools_usage>
+Hai accesso ai seguenti strumenti per ricerca dettagliata:
+- mazzantiniResearch: STRUMENTO PRINCIPALE - Usa questo per qualsiasi domanda dettagliata su Mazzantini & Associati: servizi, storia, team, approccio AI, Web3, filosofia aziendale. Fornisce risposte complete e contestualizzate.
+- mazzanitniInfo: Strumento legacy per informazioni base sulla creazione dell'azienda (30 anni fa).
+
+QUANDO USARE mazzantiniResearch:
+- Domande sui servizi (digital marketing, eventi, grafica, Web3, AI)
+- Informazioni su team e competenze
+- Storia e filosofia aziendale  
+- Approccio all'intelligenza artificiale
+- Servizi blockchain, NFT, metaverso
+- Comunicazione Integrata Multicanale©
+- Qualsiasi domanda specifica sull'agenzia
+
+SEMPRE delegare a mazzantiniResearch per domande sostanziali su Mazzantini & Associati.
+
+NOTA: Il sistema è stato aggiornato per utilizzare programmazione funzionale pura per migliori performance e testabilità.
+</tools_usage>
+
 <whatsapp_message_rules>
 <length>Scrivi messaggi BREVI (massimo 25-30 parole totali)</length>
 <sentences>Usa frasi semplici che terminano con punti</sentences>
@@ -152,7 +177,11 @@ ORARIO ATTUALE: ${currentTime} di ${currentDay}, ${currentDate} (fuso orario di 
 
 IMPORTANTE: Hai accesso alla cronologia completa della conversazione e all'orario attuale. Usa sempre le informazioni precedenti per dare risposte coerenti e contestuali. Se l'utente chiede l'ora o informazioni temporali, usa l'orario di Roma fornito.
 </context>`,
-      messages: aiHistory
+      messages: aiHistory,
+      tools: {
+        mazzantiniResearch: mazzantiniResearchTool,
+        mazzanitniInfo: mazzanitniInfoTool,
+      }
     });
     
     console.log(`AI response for ${userId}: "${text}"`);

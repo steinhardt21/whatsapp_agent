@@ -1,6 +1,9 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { generateText } from 'ai';
 import { config } from '../config.js';
+import { mazzantiniResearchTool, mazzanitniInfoTool } from './tools/index.js';
+import { RedisMessageTracker, messageTrackingConfig } from './message-tracking/index.js';
+import { getRedisClient } from './session/redis-client.js';
 /**
  * Get current time and day in Rome timezone
  */
@@ -30,6 +33,17 @@ const getRomeTimeAndDay = () => {
 };
 // Message history storage (in a real app, use a database)
 const conversationHistory = new Map();
+// Initialize message tracker for enhanced context
+let messageTracker = null;
+async function getMessageTracker() {
+    if (!messageTracker) {
+        const redisClient = await getRedisClient();
+        if (redisClient) {
+            messageTracker = new RedisMessageTracker(redisClient, messageTrackingConfig);
+        }
+    }
+    return messageTracker;
+}
 /**
  * Get conversation history for a user
  */
@@ -61,6 +75,25 @@ export const processUserMessage = async (userId, userMessage, conversationHistor
             console.warn('Anthropic API key not configured, using fallback response');
             return `Ciao, sono l'assistente di Mazzantini Associati. Al momento l'AI non è configurata. Come posso esserti utile?`;
         }
+        // Get enhanced user context
+        const tracker = await getMessageTracker();
+        let userContext = '';
+        if (tracker) {
+            const contextData = await tracker.getUserContext(userId);
+            if (contextData) {
+                userContext = `
+<user_context>
+  <phone_number>${contextData.phoneNumber}</phone_number>
+  <display_name>${contextData.displayName || 'Non fornito'}</display_name>
+  <message_count>${contextData.messageCount}</message_count>
+  <last_active>${contextData.lastActiveAt.toISOString()}</last_active>
+  <preferred_language>${contextData.contextData.preferredLanguage || 'italiano'}</preferred_language>
+  <conversation_summary>${contextData.conversationSummary || 'Nuova conversazione'}</conversation_summary>
+  <topics_discussed>${contextData.contextData.topics.join(', ') || 'Nessuno ancora'}</topics_discussed>
+  <last_services_mentioned>${contextData.contextData.lastMentionedServices.join(', ') || 'Nessuno'}</last_services_mentioned>
+</user_context>`;
+            }
+        }
         // Convert session history to AI format
         const aiHistory = conversationHistory.map(msg => ({
             role: msg.role,
@@ -82,6 +115,7 @@ export const processUserMessage = async (userId, userMessage, conversationHistor
         // Generate AI response with Mazzantini&Associati system prompt
         const { text } = await generateText({
             model: anthropic('claude-3-5-sonnet-20240620'),
+            maxSteps: 5,
             system: `<role>
 Sei l'assistente virtuale di Mazzantini&Associati ("Assistente Mazzantini&Associati"). Aiuti a rispondere a domande, a pianificare eventi su Google Calendar e a identificare opportunità commerciali per Mazzantini&Associati.
 </role>
@@ -117,6 +151,25 @@ Quando rilevi interesse per un servizio:
 </appointment_proposal>
 </service_intent_detection>
 
+    <tools_usage>
+Hai accesso ai seguenti strumenti per ricerca dettagliata:
+- mazzantiniResearch: STRUMENTO PRINCIPALE - Usa questo per qualsiasi domanda dettagliata su Mazzantini & Associati: servizi, storia, team, approccio AI, Web3, filosofia aziendale. Fornisce risposte complete e contestualizzate.
+- mazzanitniInfo: Strumento legacy per informazioni base sulla creazione dell'azienda (30 anni fa).
+
+QUANDO USARE mazzantiniResearch:
+- Domande sui servizi (digital marketing, eventi, grafica, Web3, AI)
+- Informazioni su team e competenze
+- Storia e filosofia aziendale  
+- Approccio all'intelligenza artificiale
+- Servizi blockchain, NFT, metaverso
+- Comunicazione Integrata Multicanale©
+- Qualsiasi domanda specifica sull'agenzia
+
+SEMPRE delegare a mazzantiniResearch per domande sostanziali su Mazzantini & Associati.
+
+NOTA: Il sistema è stato aggiornato per utilizzare programmazione funzionale pura per migliori performance e testabilità.
+</tools_usage>
+
 <whatsapp_message_rules>
 <length>Scrivi messaggi BREVI (massimo 25-30 parole totali)</length>
 <sentences>Usa frasi semplici che terminano con punti</sentences>
@@ -130,9 +183,15 @@ Stai comunicando via WhatsApp. ${isFirstMessage ? 'Questo è il primo messaggio 
 
 ORARIO ATTUALE: ${currentTime} di ${currentDay}, ${currentDate} (fuso orario di Roma)
 
-IMPORTANTE: Hai accesso alla cronologia completa della conversazione e all'orario attuale. Usa sempre le informazioni precedenti per dare risposte coerenti e contestuali. Se l'utente chiede l'ora o informazioni temporali, usa l'orario di Roma fornito.
+${userContext}
+
+IMPORTANTE: Hai accesso alla cronologia completa della conversazione, al contesto utente e all'orario attuale. Usa sempre le informazioni precedenti per dare risposte coerenti e contestuali. Se l'utente chiede l'ora o informazioni temporali, usa l'orario di Roma fornito. Se hai informazioni sul nome utente o altre informazioni personali, usale per personalizzare la risposta.
 </context>`,
-            messages: aiHistory
+            messages: aiHistory,
+            tools: {
+                mazzantiniResearch: mazzantiniResearchTool,
+                mazzanitniInfo: mazzanitniInfoTool,
+            }
         });
         console.log(`AI response for ${userId}: "${text}"`);
         return text;
