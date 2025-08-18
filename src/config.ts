@@ -19,5 +19,13 @@ export const config = {
   LISTENER_PORT: parseInt(process.env.LISTENER_PORT || '3000', 10),
   
   // Anthropic API key for AI features
-  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || ''
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+  
+  // PostgreSQL database configuration
+  DATABASE_URL: process.env.DATABASE_URL || '',
+  DB_HOST: process.env.DB_HOST || 'localhost',
+  DB_PORT: parseInt(process.env.DB_PORT || '5432', 10),
+  DB_NAME: process.env.DB_NAME || 'whatsapp_agent',
+  DB_USER: process.env.DB_USER || 'postgres',
+  DB_PASSWORD: process.env.DB_PASSWORD || ''
 };

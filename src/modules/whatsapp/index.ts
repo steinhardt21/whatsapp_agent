@@ -2,7 +2,7 @@
 export { getWhatsAppInstance, testConfiguration } from './client.js';
 
 // Messaging functions
-export { sendMessage, sendAutoReply, createAutoReplyText } from './messaging.js';
+export { sendMessage, sendAutoReply, createAutoReplyText, sendTemplateMessage, sendIntentionQuestionTemplate } from './messaging.js';
 
 // Status and typing indicators
 export { sendTypingIndicator } from './status.js';

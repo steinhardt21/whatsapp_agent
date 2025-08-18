@@ -19,16 +19,19 @@
   "license": "ISC",
   "packageManager": "pnpm@10.9.0",
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.0.2",
+    "@ai-sdk/anthropic": "^2.0.4",
     "@modelcontextprotocol/sdk": "^1.17.2",
-    "ai": "^4.0.17",
+    "ai": "^5.0.15",
+    "anthropic@latest": "link:ai-sdk/anthropic@latest",
     "fastify": "^5.5.0",
+    "pg": "^8.13.1",
     "redis": "^4.7.1",
     "whatsapp": "0.0.5-Alpha",
-    "zod": "^3.23.8"
+    "zod": "^4.0.17"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/pg": "^8.11.10",
     "dotenv": "^16.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"

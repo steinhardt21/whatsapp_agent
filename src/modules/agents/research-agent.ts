@@ -154,10 +154,9 @@ export const researchMazzantiniQuery = async (
     ];
 
     const { text } = await generateText({
-      model: anthropic('claude-3-5-sonnet-20240620'),
+      model: anthropic("claude-4-sonnet-20250514"),
       system: getMazzantiniSystemPrompt(),
-      messages,
-      maxSteps: 3
+      messages
     });
 
     return {

@@ -1,570 +1,451 @@
-import { tool } from 'ai';
+import { tool, generateText } from 'ai';
 import { z } from 'zod';
-import { calendarAgent } from '../agents/calendar-agent.js';
-import { extractEmailsFromText, isValidEmail, validateAndFormatEmail } from '../../utils/validation.js';
-import { getUserProfileManager } from '../user-profile/manager.js';
-import { AppointmentInfo, AppointmentStatus } from '../user-profile/types.js';
+import { anthropic } from '@ai-sdk/anthropic';
 
 /**
- * Calendar Management Tool for the AI Assistant
+ * Calendar Management Tool for Call Scheduling
  * 
- * This tool allows the AI assistant to interact with Google Calendar
- * through the specialized calendar agent that connects to an MCP server.
+ * This tool allows the AI assistant to schedule, modify, and cancel calls/meetings 
+ * through Google Calendar via an MCP (Model Context Protocol) server.
+ * It's specifically designed for call scheduling with Francesco di Gyver.
  */
 
 export const calendarTool = tool({
-  description: `Gestisce operazioni del calendario Google come:
-- Creare eventi nel calendario
-- Cercare eventi esistenti  
-- Modificare eventi
-- Cancellare eventi
-- Visualizzare il calendario
+  description: `
+   Strumento per la gestione del calendario per la programmazione di chiamate con Francesco di Gyver:
+    - Programmare nuove chiamate/appuntamenti nel calendario
+    - Modificare chiamate esistenti (orario, durata, dettagli)
+    - Cancellare chiamate programmate
+    - Visualizzare disponibilità del calendario.`,
 
-Usa questo tool per qualsiasi richiesta relativa al calendario, appuntamenti, eventi o gestione del tempo.`,
-  
-  parameters: z.object({
-    action: z.enum([
-      'search', 
-      'create', 
-      'update', 
-      'delete', 
-      'get_all',
-      'process_request',
-      'check_availability'
-    ]).describe('Tipo di operazione da eseguire sul calendario'),
-    
-    phoneNumber: z.string().describe('Numero di telefono dell\'utente (per gestione profilo)'),
-    userRequest: z.string().optional().describe('Richiesta originale dell\'utente in linguaggio naturale'),
-    
-    // For search operations
-    query: z.string().optional().describe('Termine di ricerca per gli eventi'),
-    timeMin: z.string().optional().describe('Data/ora minima in formato ISO (es: 2024-01-01T00:00:00Z)'),
-    timeMax: z.string().optional().describe('Data/ora massima in formato ISO (es: 2024-01-31T23:59:59Z)'),
-    
-    // For create/update operations
-    eventData: z.object({
-      summary: z.string().describe('Titolo dell\'evento'),
-      description: z.string().optional().describe('Descrizione dell\'evento'),
-      start: z.object({
-        dateTime: z.string().describe('Data/ora inizio in formato ISO'),
-        timeZone: z.string().optional().describe('Fuso orario (default: Europe/Rome)')
-      }),
-      end: z.object({
-        dateTime: z.string().describe('Data/ora fine in formato ISO'),
-        timeZone: z.string().optional().describe('Fuso orario (default: Europe/Rome)')
-      }),
-      location: z.string().optional().describe('Luogo dell\'evento'),
-      attendees: z.array(z.object({
-        email: z.string().describe('Email del partecipante')
-      })).optional().describe('Lista partecipanti')
-    }).optional().describe('Dati dell\'evento per creazione/modifica'),
-    
-    // For update/delete operations
-    eventId: z.string().optional().describe('ID dell\'evento da modificare/cancellare')
+  inputSchema: z.object({
+    action: z.enum(['create', 'delete', 'modify', 'view']),
+    userId: z.string().describe('ID dell\'utente'),
+    userRequest: z.string().describe('Richiesta dell\'utente in linguaggio naturale per la gestione del calendario'),
+    phoneNumber: z.string().optional().describe('Numero di telefono del chiamante (per eventi di tipo chiamata)'),
+    googleCalendarId: z.string().optional().describe('ID specifico del calendario Google (opzionale) dell\'appuntamento se esiste'),
+    currentAppointmentInfo: z.string().optional().describe('Informazioni sull\'appuntamento corrente (opzionale) se ne esiste uno')
   }),
 
-  execute: async ({ 
-    action, 
-    phoneNumber,
-    userRequest, 
-    query, 
-    timeMin, 
-    timeMax, 
-    eventData, 
-    eventId 
+  execute: async ({ action, userRequest, phoneNumber, googleCalendarId, userId, currentAppointmentInfo }: {
+    action: 'create' | 'delete' | 'modify' | 'view',
+    userRequest: string,
+    phoneNumber?: string,
+    googleCalendarId?: string,
+    userId: string,
+    currentAppointmentInfo?: string
   }) => {
-    // Store start time for performance monitoring
-    const startTime = Date.now();
-    
+
+    console.log('🟠111**** User request:', userRequest);
+
     try {
-      console.log(`📅 [CALENDAR TOOL DEBUG] Calendar tool executing action: ${action} for user ${phoneNumber}`);
-      console.log(`📅 [CALENDAR TOOL DEBUG] Tool parameters:`, {
-        action,
-        phoneNumber,
-        userRequest,
-        query,
-        timeMin,
-        timeMax,
-        eventData,
-        eventId
+      console.log(`🗓️ [CALENDAR TOOL] Executing ${action} action for user request: "${userRequest}"`);
+      const now = new Date();
+      const romeTime = new Intl.DateTimeFormat('it-IT', {
+        timeZone: 'Europe/Rome',
+        hour: '2-digit',
+        minute: '2-digit',
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
       });
 
-      // Get user profile manager
-      const profileManager = getUserProfileManager();
-      
-      // Get user profile and extract email for event filtering
-      await profileManager.updateFromConversation(phoneNumber, userRequest || '');
-      const currentProfile = await profileManager.getProfile(phoneNumber);
-      
-      // Extract emails from multiple sources
-      let userEmail: string | null = null;
-      
-      // 1. First, try user profile
-      if (currentProfile?.email && isValidEmail(currentProfile.email)) {
-        userEmail = currentProfile.email;
-        console.log(`📧 [CALENDAR TOOL DEBUG] Using email from user profile: ${userEmail}`);
-      }
-      
-      // 2. Try to extract from userRequest
-      if (!userEmail && userRequest) {
-        console.log(`📧 [CALENDAR TOOL DEBUG] Extracting emails from user request: "${userRequest}"`);
-        const extractedEmails = extractEmailsFromText(userRequest);
-        console.log(`📧 [CALENDAR TOOL DEBUG] Extracted emails from userRequest:`, extractedEmails);
-        if (extractedEmails.length > 0) {
-          userEmail = validateAndFormatEmail(extractedEmails[0]);
-          console.log(`📧 [CALENDAR TOOL DEBUG] Valid user email found in userRequest: ${userEmail}`);
-        }
-      }
-      
-      // Check if calendar agent is ready
-      console.log(`🔍 [CALENDAR TOOL DEBUG] Checking if calendar agent is ready...`);
-      const isReady = await calendarAgent.isReady();
-      console.log(`🎯 [CALENDAR TOOL DEBUG] Calendar agent ready: ${isReady}`);
-      
-      if (!isReady) {
-        console.warn(`⚠️ [CALENDAR TOOL DEBUG] Calendar agent not ready, providing fallback response`);
+      const currentDateTime = romeTime.format(now);
+
+      const { text, reasoningText, reasoning, toolCalls, toolResults: toolResults2 } = await generateText({
+        model: anthropic("claude-4-sonnet-20250514"),
+        toolChoice: "auto",
+        tools: {
+          updateEventCalendar: tool({
+            name: 'updateEventCalendar',
+            description: 'Update an existing event in the calendar. To use when the user wants to change the time of an existing event.',
+            inputSchema: z.object({
+              newEventStartTime: z.string().describe('New start time of the event in ISO 8601 format with timezone (e.g., 2025-08-16T17:14:40.959+02:00)'),
+              newEventEndTime: z.string().describe('New end time of the event in ISO 8601 format with timezone (e.g., 2025-08-16T18:14:40.959+02:00)'),
+              googleCalendarId: z.string().describe('Google Calendar ID of the event necessary to update the event'),
+            }),
+            execute: async ({ newEventStartTime, newEventEndTime, googleCalendarId }) => {
+              console.log(`🗓️ [CALENDAR TOOL] Updating event: ${googleCalendarId}`);
+
+              const response = await fetch('https://gyver.app.n8n.cloud/webhook/00912b7c-b6c2-46dc-9ebd-5add9efafe79', {
+                method: 'POST',
+                body: JSON.stringify({
+                  type: 'updateEvent',
+                  userId,
+                  googleCalendarId,
+                  newEventStartTime,
+                  newEventEndTime
+                })
+              });
+
+              const data = await response.json();
+
+              console.log(`🗓️ [CALENDAR TOOL] MCP Response:`, data);
+
+              return {
+                success: true,
+                message: data
+              };
+            }
+          }),
+          deleteEventCalendar: tool({
+            name: 'deleteEventCalendar',
+            description: 'Delete an existing event in the calendar. To use when the user wants to cancel an existing event.',
+            inputSchema: z.object({
+              googleCalendarIdEvent: z.string().describe('Google Calendar ID of the event necessary to delete the event'),
+            }),
+            execute: async ({ googleCalendarIdEvent }) => {
+
+              console.log(`🗓️ [CALENDAR TOOL] Deleting event: ${googleCalendarIdEvent}`);
+
+              const response = await fetch('https://gyver.app.n8n.cloud/webhook/00912b7c-b6c2-46dc-9ebd-5add9efafe79', {
+                method: 'POST',
+                body: JSON.stringify({
+                  type: 'deleteEvent',
+                  userId,
+                  googleCalendarId
+                })
+              });
+
+              const data = await response.json();
+
+
+              // Control in the database if the event exists
+
+              console.log(`🗓️ [CALENDAR TOOL] MCP Response:`, data);
+
+              return {
+                success: true,
+                message: data
+              };
+            }
+          }),
+          createEventCalendar: tool({
+            name: 'createEventCalendar',
+            description: 'Create a new event in the calendar',
+            inputSchema: z.object({
+              eventName: z.string(),
+              eventDescription: z.string(),
+              eventStartTime: z.string().describe('Event start time in ISO 8601 format with timezone (e.g., 2025-08-16T17:14:40.959+02:00)'),
+              eventEndTime: z.string().describe('Event end time in ISO 8601 format with timezone (e.g., 2025-08-16T18:14:40.959+02:00)'),
+            }),
+            execute: async ({ eventName, eventDescription, eventStartTime, eventEndTime }) => {
+              console.log(`🗓️ [CALENDAR TOOL] Creating event: ${eventName} on ${eventStartTime} at ${eventEndTime}`);
+
+              const response = await fetch('https://gyver.app.n8n.cloud/webhook/00912b7c-b6c2-46dc-9ebd-5add9efafe79', {
+                method: 'POST',
+                body: JSON.stringify({
+                  type: 'createEvent',
+                  userId,
+                  eventName,
+                  eventDescription,
+                  eventStartTime,
+                  eventEndTime
+                })
+              });
+
+              const data = await response.json();
+
+              console.log(`🗓️ [CALENDAR TOOL] MCP Response:`, data);
+
+              return {
+                success: true,
+                message: data
+              };
+            }
+          }),
+        },
+        system: 
+        `   <role>
+              You are a professional calendar assistant for Francesco di Gyver.
+              Your current task is to ${action.toUpperCase()} calendar events/calls based on the user's request.
+
+              At the end summaries the result obtained from your operations. Specifically, if you have created, modified or deleted an event, you must return the result of the operation.
+            </role>
+
+            <context>
+            <current_time>
+            The current time in Rome is: ${currentDateTime}
+            </current_time>
+            <timezone>Europe/Rome (+01:00 or +02:00 depending on DST)</timezone>
+            <default_duration>30 minutes unless specified otherwise</default_duration>
+            ${currentAppointmentInfo ? `
+            <existing_appointments>
+            ${currentAppointmentInfo}
+            </existing_appointments>` : ''}
+
+            <google_calendar_id>
+            ${googleCalendarId ? `
+            The Google Calendar ID of the appointment is: ${googleCalendarId}
+            ` : ''}
+            </google_calendar_id>
+            </context>
+
+            <tools>
+            <tool name="createEventCalendar">
+              <description>Creates new calendar events</description>
+              <when_to_use>
+                <trigger_phrases>
+                  - "vorrei un appuntamento"
+                  - "programma una chiamata" 
+                  - "book a meeting"
+                </trigger_phrases>
+                <conditions>User wants to schedule a new appointment/call</conditions>
+              </when_to_use>
+              <required_parameters>
+                - eventName
+                - eventDescription
+                - eventStartTime (ISO 8601 format with timezone)
+                - eventEndTime (ISO 8601 format with timezone)
+              </required_parameters>
+              <example>Creating "Chiamata con Alex Enache" for tomorrow at 14:00</example>
+            </tool>
+
+            <tool name="updateEventCalendar">
+              <description>Modifies existing calendar events</description>
+              <when_to_use>
+                <trigger_phrases>
+                  - "cambia l'orario"
+                  - "sposta alle"
+                  - "modifica l'appuntamento"
+                </trigger_phrases>
+                <conditions>User wants to change the time/date of an existing appointment</conditions>
+              </when_to_use>
+              <required_parameters>
+                - eventId (from existing appointments)
+                - newEventStartTime (ISO 8601 format with timezone)
+                - newEventEndTime (ISO 8601 format with timezone)
+              </required_parameters>
+              <important_notes>
+                - Format all dates and times in ISO 8601 format with timezone information
+                - Example format: 2025-08-16T17:14:40.959+02:00
+                - Duration remains 30 minutes if not specified
+              </important_notes>
+              <example>Moving existing appointment from 15:00 to 16:00</example>
+            </tool>
+
+            <tool name="deleteEventCalendar">
+              <description>Removes calendar events</description>
+              <when_to_use>
+                <trigger_phrases>
+                  - "cancella l'appuntamento"
+                  - "elimina"
+                  - "annulla la chiamata"
+                </trigger_phrases>
+                <conditions>User wants to cancel/delete an existing appointment</conditions>
+              </when_to_use>
+              <required_parameters>
+                - eventId (from existing appointments)
+              </required_parameters>
+              <example>Cancelling today's appointment at 14:00</example>
+            </tool>
+
+
+            <behavior_guidelines>
+            <datetime_formatting>
+            - Always use ISO 8601 format with timezone information
+            - Use Europe/Rome timezone (+01:00 or +02:00 depending on DST)
+            - Example: 2025-08-16T17:14:40.959+02:00
+            </datetime_formatting>
+
+            <response_approach>
+            - Identify user intent from trigger phrases
+            - If the user request requires calendar action, select appropriate tool based on the action requested
+            - If the user request is informational or unclear, provide a helpful text response without calling tools
+            - Ensure all required parameters are available before executing tools
+            - After executing tools, always provide a clear text summary of what was accomplished
+            - Include specific details about created, modified, or deleted events in your response
+            - Always respond in text when tools are not needed or when clarification is required
+            ${currentAppointmentInfo ? `
+            - IMPORTANT: When existing appointments are provided, use the Google Calendar IDs from that information for delete/modify operations
+            - Match appointment details (date, time) from user requests with the existing appointments to identify which event to modify/delete
+            - Use the appointment ID and Google Calendar ID from the existing appointments data when calling tools` : ''}
+            </response_approach>
+
+            <language_handling>
+            - Respond in Italian when user communicates in Italian
+            - Support multilingual calendar event names and descriptions
+            - Maintain professional tone throughout interactions
+            </language_handling>
+            </behavior_guidelines>`,
+        messages: [{ role: 'user', content: userRequest }],
+      });
+
+      console.log('🟠111**** User Request:', userRequest)
+
+      // console.log(`🗓️ [CALENDAR TOOL] MCP Response:`, response.text);
+
+
+      // console.log(`🗓️ [CALENDAR TOOL] Response:`, response);
+
+
+      console.log('🟠111**** Response AGENT CALENDAR:', text);
+      console.log('🟠111**** Tool Calls:', toolCalls);
+      console.log('🟠111**** Tool Results:', toolResults2);
+      console.log('🟠111**** Reasoning:', reasoning);
+      console.log('🟠111**** Reasoning Text:', reasoningText);
+
+      // Compile tool execution results for the orchestrator from toolResults2
+      let processedToolResults: any[] = [];
+      let fullMessage = text;
+
+      // Process toolResults2 which contains the actual tool execution results
+      if (toolResults2 && toolResults2.length > 0) {
+        console.log('🟠 Processing toolResults2:', toolResults2);
         
-        // Provide helpful fallback message based on the action
-        switch (action) {
-          case 'check_availability':
-          case 'search':
-            return {
-              success: false,
-              message: "🔧 Il sistema di gestione del calendario non è al momento disponibile (errore di connessione al server). Posso comunque prendere nota della tua richiesta di appuntamento per lunedì alle 16:00 e confermarla appena il servizio sarà attivo. Vuoi procedere?",
-              fallbackMode: true,
-              suggestedAction: 'manual_booking',
-              action: action,
-              serverStatus: 'mcp_server_unavailable_404'
-            };
-            
-          case 'create':
-            return {
-              success: false,
-              message: "🔧 Il sistema di gestione del calendario non è al momento disponibile (errore di connessione al server). Ho preso nota della tua richiesta di appuntamento e ti contatteremo appena possibile per confermare la disponibilità.",
-              fallbackMode: true,
-              action: action,
-              serverStatus: 'mcp_server_unavailable_404'
-            };
-            
-          default:
-            return {
-              success: false,
-              message: "🔧 Il sistema di gestione del calendario non è al momento disponibile (errore di connessione al server). Riprova tra qualche minuto o contattaci direttamente.",
-              action: action,
-              serverStatus: 'mcp_server_unavailable_404'
-            };
+        for (const toolResult of toolResults2) {
+          // Extract data from the toolResults2 structure
+          const toolName = toolResult.toolName || 'Unknown Tool';
+          const input = toolResult.input || {};
+          const output = toolResult.output || {};
+          
+          processedToolResults.push({
+            toolCallId: toolResult.toolCallId,
+            toolName: toolName,
+            input: input,
+            output: output,
+            success: (output as any)?.success ?? false,
+            message: (output as any)?.message
+          });
+        }
+
+        // Create comprehensive summary for the orchestrator
+        if (processedToolResults.length > 0) {
+          const toolSummaries = processedToolResults.map(tr => {
+            try {
+              const success = tr.success ? 'Success' : 'Failed';
+              const toolName = tr.toolName;
+              
+              // Create a more detailed summary based on tool type
+              let detailMessage = '';
+              if (tr.message) {
+                if (typeof tr.message === 'object') {
+                  // Handle different tool response formats
+                  if (toolName === 'getEventsCalendar' && Array.isArray(tr.message)) {
+                    detailMessage = `Found ${tr.message.length} events`;
+                  } else if (toolName === 'createEventCalendar' && tr.message.id) {
+                    detailMessage = `Event created with ID: ${tr.message.id}`;
+                  } else if (toolName === 'updateEventCalendar') {
+                    detailMessage = 'Event updated successfully';
+                  } else if (toolName === 'deleteEventCalendar') {
+                    detailMessage = 'Event deleted successfully';
+                  } else {
+                    detailMessage = JSON.stringify(tr.message);
+                  }
+                } else {
+                  detailMessage = String(tr.message);
+                }
+              } else {
+                detailMessage = 'No details available';
+              }
+              
+              return `${toolName}: ${success} - ${detailMessage}`;
+            } catch (e) {
+              return `${tr.toolName}: Result processing error - ${e}`;
+            }
+          }).join('\n');
+
+          // Add the summary to the full message
+          fullMessage = text + (text ? '\n\n' : '') + `📋 Riepilogo operazioni:\n${toolSummaries}`;
         }
       }
 
-      switch (action) {
-        case 'check_availability':
-          // Check user's current appointment status
-          const userProfile = await profileManager.getProfile(phoneNumber);
-          const canSchedule = await profileManager.canScheduleAppointment(phoneNumber);
-          
-          if (!canSchedule.canSchedule) {
-            return {
-              success: false,
-              message: canSchedule.reason,
-              currentAppointment: userProfile?.currentAppointment,
-              hasExistingAppointment: true
-            };
-          }
-          
-          // If user can schedule, check calendar availability by searching their events
-          let availabilityResults;
-          if (userEmail) {
-            console.log(`🔍 [CALENDAR TOOL DEBUG] Checking availability for user email: ${userEmail}`);
-            availabilityResults = await calendarAgent.searchUserEvents(
-              userEmail,
-              timeMin || new Date().toISOString(), 
-              timeMax || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() // Next 7 days
-            );
-          } else {
-            console.log(`🔍 [CALENDAR TOOL DEBUG] No user email - checking general availability`);
-            availabilityResults = await calendarAgent.searchEvents(
-              '', 
-              timeMin || new Date().toISOString(), 
-              timeMax || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() // Next 7 days
-            );
-          }
-          
-          return {
-            success: true,
-            message: "L'utente può fissare un nuovo appuntamento",
-            canSchedule: true,
-            existingEvents: availabilityResults,
-            userProfile: {
-              name: userProfile?.name,
-              email: userProfile?.email,
-              interestLevel: userProfile?.interestLevel
-            }
-          };
+      console.log('🟠 Processed Tool Results Count:', processedToolResults.length);
+      console.log('🟠 Full Message for Orchestrator:', fullMessage);
 
-        case 'process_request':
-          if (!userRequest) {
-            return {
-              success: false,
-              message: "Richiesta utente mancante per l'elaborazione"
-            };
-          }
-          
-          const response = await calendarAgent.processCalendarRequest(userRequest);
-          return {
-            success: true,
-            message: response,
-            action: 'process_request'
-          };
+      return {
+        success: true,
+        message: text + '\n\n' + fullMessage,
+        action: action,
+        phoneNumber: phoneNumber,
+        toolCalls: toolCalls?.length || 0,
+        toolResults: processedToolResults, // Include detailed tool results for orchestrator
+        rawToolResults: toolResults2 // Include raw tool results for debugging
+      };
 
-        case 'search':
-          // Search for events where the user is an attendee
-          let searchResults;
-          if (userEmail) {
-            console.log(`🔍 [CALENDAR TOOL DEBUG] Searching events for user email: ${userEmail}`);
-            searchResults = await calendarAgent.searchUserEvents(
-              userEmail,
-              timeMin, 
-              timeMax
-            );
-          } else {
-            console.log(`🔍 [CALENDAR TOOL DEBUG] No user email - searching all events`);
-            searchResults = await calendarAgent.searchEvents(
-              query || '', 
-              timeMin, 
-              timeMax
-            );
-          }
-          
-          return {
-            success: true,
-            data: searchResults,
-            message: userEmail 
-              ? `Trovati ${searchResults?.events?.length || 0} tuoi appuntamenti nel calendario`
-              : `Ricerca completata${query ? ` per "${query}"` : ''}`,
-            action: 'search',
-            userEmail: userEmail
-          };
-
-        case 'get_all':
-          const allEvents = await calendarAgent.getAllEvents(timeMin, timeMax);
-          
-          const timeRange = timeMin && timeMax 
-            ? ` dal ${new Date(timeMin).toLocaleDateString('it-IT')} al ${new Date(timeMax).toLocaleDateString('it-IT')}`
-            : '';
-          
-          return {
-            success: true,
-            data: allEvents,
-            message: `Recuperati tutti gli eventi${timeRange}`,
-            action: 'get_all'
-          };
-
-        case 'create':
-          console.log(`📅 [CALENDAR TOOL DEBUG] Processing 'create' action for ${phoneNumber}`);
-          
-          // First check if user can schedule an appointment
-          const canUserSchedule = await profileManager.canScheduleAppointment(phoneNumber);
-          if (!canUserSchedule.canSchedule) {
-            console.log(`⚠️ [CALENDAR TOOL DEBUG] User ${phoneNumber} cannot schedule: ${canUserSchedule.reason}`);
-            return {
-              success: false,
-              message: canUserSchedule.reason,
-              needsReschedule: true
-            };
-          }
-          
-          if (!eventData) {
-            console.error(`❌ [CALENDAR TOOL DEBUG] Missing event data for creation`);
-            return {
-              success: false,
-              message: "Dati evento mancanti per la creazione"
-            };
-          }
-          
-          console.log(`📅 [CALENDAR TOOL DEBUG] Original event data:`, eventData);
-          
-          // Check if eventData already has attendees with email (fallback)
-          if (!userEmail && eventData.attendees && eventData.attendees.length > 0) {
-            const attendeeEmail = eventData.attendees[0]?.email;
-            console.log(`📧 [CALENDAR TOOL DEBUG] Checking attendee email from eventData: "${attendeeEmail}"`);
-            
-            if (attendeeEmail && isValidEmail(attendeeEmail)) {
-              userEmail = validateAndFormatEmail(attendeeEmail);
-              console.log(`📧 [CALENDAR TOOL DEBUG] Valid user email found in eventData: ${userEmail}`);
-            }
-          }
-          
-          // Check if we have essential information
-          const missingInfo = [];
-          
-          if (!userEmail) {
-            missingInfo.push('email');
-          }
-          
-          if (!currentProfile?.name) {
-            missingInfo.push('nome');
-          }
-          
-          if (missingInfo.length > 0) {
-            console.log(`⚠️ [CALENDAR TOOL DEBUG] Missing information:`, missingInfo);
-            console.log(`📋 [CALENDAR TOOL DEBUG] Current profile:`, {
-              name: currentProfile?.name,
-              email: currentProfile?.email
-            });
-            
-            return {
-              success: false,
-              message: `ATTENZIONE AI: Informazioni mancanti per l'appuntamento. Controlla PROFILO UTENTE CORRENTE nella tua configurazione. Richiedi solo: ${missingInfo.join(', ')}. NON chiedere "nome completo", chiedi solo "nome".`,
-              missingInformation: missingInfo,
-              needsEmail: missingInfo.includes('email'),
-              needsName: missingInfo.includes('nome'),
-              action: 'create',
-              userProfile: {
-                name: currentProfile?.name,
-                email: currentProfile?.email,
-                completionPercentage: Math.round((currentProfile?.completionPercentage || 0) * 100)
-              }
-            };
-          }
-          
-          // Positive confirmation when profile is complete
-          console.log(`✅ [CALENDAR TOOL DEBUG] All required information available:`);
-          console.log(`✅ [CALENDAR TOOL DEBUG] - Name: ${currentProfile?.name || 'Non disponibile'}`);
-          console.log(`✅ [CALENDAR TOOL DEBUG] - Email: ${userEmail}`);
-          console.log(`✅ [CALENDAR TOOL DEBUG] - Profile completion: ${Math.round((currentProfile?.completionPercentage || 0) * 100)}%`);
-          
-          // Set default timezone if not provided
-          if (!eventData.start.timeZone) {
-            eventData.start.timeZone = 'Europe/Rome';
-            console.log(`🌍 [CALENDAR TOOL DEBUG] Set default start timezone: Europe/Rome`);
-          }
-          if (!eventData.end.timeZone) {
-            eventData.end.timeZone = 'Europe/Rome';
-            console.log(`🌍 [CALENDAR TOOL DEBUG] Set default end timezone: Europe/Rome`);
-          }
-          
-          // Set primary attendee to user's email
-          eventData.attendees = [{ email: userEmail! }]; // userEmail is guaranteed to be non-null at this point
-          console.log(`👥 [CALENDAR TOOL DEBUG] Set primary attendee to user email: ${userEmail}`);
-          
-          console.log(`📅 [CALENDAR TOOL DEBUG] Final event data before creation:`, eventData);
-          console.log(`🚀 [CALENDAR TOOL DEBUG] Calling calendarAgent.createEvent...`);
-          
-          const createdEvent = await calendarAgent.createEvent(eventData);
-          
-          console.log(`✅ [CALENDAR TOOL DEBUG] Event creation completed successfully`);
-          console.log(`📥 [CALENDAR TOOL DEBUG] Created event response:`, createdEvent);
-          
-          // Extract meeting notes from user request
-          const meetingNotes = profileManager.extractMeetingNotes(userRequest || '');
-          
-          // Debug logging for Google Calendar ID extraction
-          console.log(`🔍 [CALENDAR TOOL DEBUG] Checking extracted calendar IDs:`);
-          console.log(`🔍 [CALENDAR TOOL DEBUG] - eventId: ${createdEvent.eventId}`);
-          console.log(`🔍 [CALENDAR TOOL DEBUG] - googleCalendarId: ${createdEvent.googleCalendarId}`);
-          console.log(`🔍 [CALENDAR TOOL DEBUG] - calendarEventUrl: ${createdEvent.calendarEventUrl}`);
-
-          // Save appointment to user profile with comprehensive details including Google Calendar ID
-          const appointmentInfo: Omit<AppointmentInfo, 'createdAt'> = {
-            // Calendar event IDs for future reference
-            eventId: createdEvent.eventId || undefined, // MCP server event ID
-            googleCalendarId: createdEvent.googleCalendarId || undefined, // Google Calendar event ID
-            calendarEventUrl: createdEvent.calendarEventUrl || undefined, // Google Calendar event URL
-            
-            title: eventData.summary,
-            description: eventData.description || '',
-            scheduledFor: new Date(eventData.start.dateTime),
-            duration: Math.round((new Date(eventData.end.dateTime).getTime() - new Date(eventData.start.dateTime).getTime()) / (1000 * 60)),
-            status: AppointmentStatus.SCHEDULED,
-            
-            // Meeting preparation details
-            meetingNotes: meetingNotes || 'Consulenza generale',
-            contactName: currentProfile?.name || 'Cliente',
-            contactEmail: userEmail || undefined,
-            
-            // Extract any specific questions or requests from the conversation
-            preparationNotes: `Cliente interessato in: ${currentProfile?.serviceInterests.join(', ') || 'servizi generali'}. Livello interesse: ${currentProfile?.interestLevel || 'unknown'}.`
-          };
-          
-          const updatedProfile = await profileManager.setAppointment(phoneNumber, appointmentInfo);
-          console.log(`👤 [CALENDAR TOOL DEBUG] Updated user profile with appointment for ${phoneNumber}`);
-          
-          return {
-            success: true,
-            data: createdEvent,
-            message: `Evento "${eventData.summary}" creato con successo. L'invito è stato inviato a ${userEmail}`,
-            action: 'create',
-            userEmail: userEmail,
-            // Google Calendar integration details
-            calendarIntegration: {
-              eventId: appointmentInfo.eventId,
-              googleCalendarId: appointmentInfo.googleCalendarId,
-              calendarEventUrl: appointmentInfo.calendarEventUrl,
-              canUpdate: !!appointmentInfo.googleCalendarId,
-              canDelete: !!appointmentInfo.googleCalendarId
-            },
-            userProfile: {
-              name: updatedProfile.name,
-              email: updatedProfile.email,
-              interestLevel: updatedProfile.interestLevel,
-              appointmentScheduled: true,
-              meetingDetails: {
-                contactName: appointmentInfo.contactName,
-                meetingNotes: appointmentInfo.meetingNotes,
-                preparationNotes: appointmentInfo.preparationNotes
-              }
-            }
-          };
-
-        case 'update':
-          if (!eventId || !eventData) {
-            return {
-              success: false,
-              message: "ID evento e dati aggiornamento richiesti per la modifica"
-            };
-          }
-          
-          const updatedEvent = await calendarAgent.updateEvent(eventId, eventData);
-          
-          return {
-            success: true,
-            data: updatedEvent,
-            message: `Evento ${eventId} aggiornato con successo`,
-            action: 'update'
-          };
-
-        case 'delete':
-          if (!eventId) {
-            return {
-              success: false,
-              message: "ID evento richiesto per la cancellazione"
-            };
-          }
-          
-          // First, try to find the appointment by Google Calendar ID in our system
-          const appointmentResult = await profileManager.findAppointmentByGoogleCalendarId(eventId);
-          if (appointmentResult) {
-            console.log(`📅 [CALENDAR TOOL DEBUG] Found appointment to delete for user ${appointmentResult.profile.phoneNumber}`);
-          }
-
-          const deletedEvent = await calendarAgent.deleteEvent(eventId);
-          
-          // Cancel appointment in user profile
-          const cancelledProfile = await profileManager.cancelAppointment(phoneNumber, 'Evento cancellato tramite sistema');
-          console.log(`👤 [CALENDAR TOOL DEBUG] Cancelled appointment in user profile for ${phoneNumber}`);
-          
-          return {
-            success: true,
-            data: deletedEvent,
-            message: `Evento ${eventId} cancellato con successo`,
-            action: 'delete',
-            calendarIntegration: {
-              googleCalendarId: eventId,
-              appointmentFound: !!appointmentResult,
-              userAffected: appointmentResult?.profile.phoneNumber
-            },
-            userProfile: {
-              name: cancelledProfile?.name,
-              email: cancelledProfile?.email,
-              hasAppointment: false
-            }
-          };
-
-        default:
-          return {
-            success: false,
-            message: `Azione non supportata: ${action}`
-          };
-      }
     } catch (error) {
-      console.error('❌ [CALENDAR TOOL DEBUG] Calendar tool error:', error);
-      console.error('❌ [CALENDAR TOOL DEBUG] Error details:', {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-        name: error instanceof Error ? error.name : typeof error,
-        action,
-        parameters: { userRequest, query, timeMin, timeMax, eventData, eventId }
-      });
-      
+      console.error(`❌ [CALENDAR TOOL] Error executing ${action}:`, error);
+
       return {
         success: false,
-        message: `Errore durante l'operazione calendario: ${error}`,
-        error: error instanceof Error ? error.message : String(error)
+        message: `Errore durante l'operazione del calendario: ${error instanceof Error ? error.message : 'Errore sconosciuto'}`,
+        action: action,
+        error: error instanceof Error ? error.message : 'Unknown error'
       };
-    } finally {
-      // Log execution time for performance monitoring
-      const executionTime = Date.now() - startTime;
-      console.log(`⏱️ [CALENDAR TOOL DEBUG] Tool execution completed in ${executionTime}ms`);
     }
-  }
+  },
+
+  name: 'calendarManagement'
+
 });
 
 /**
  * Helper function to parse natural language time expressions
  * This is a simple implementation - in production you'd use a more sophisticated parser
  */
-export function parseTimeExpression(expression: string): { timeMin?: string; timeMax?: string } {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  
-  expression = expression.toLowerCase();
-  
-  if (expression.includes('oggi')) {
-    const endOfDay = new Date(today);
-    endOfDay.setHours(23, 59, 59, 999);
-    
-    return {
-      timeMin: today.toISOString(),
-      timeMax: endOfDay.toISOString()
-    };
-  }
-  
-  if (expression.includes('domani')) {
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    
-    const endOfTomorrow = new Date(tomorrow);
-    endOfTomorrow.setHours(23, 59, 59, 999);
-    
-    return {
-      timeMin: tomorrow.toISOString(),
-      timeMax: endOfTomorrow.toISOString()
-    };
-  }
-  
-  if (expression.includes('questa settimana')) {
-    const endOfWeek = new Date(today);
-    endOfWeek.setDate(endOfWeek.getDate() + (7 - endOfWeek.getDay()));
-    endOfWeek.setHours(23, 59, 59, 999);
-    
-    return {
-      timeMin: today.toISOString(),
-      timeMax: endOfWeek.toISOString()
-    };
-  }
-  
-  if (expression.includes('prossima settimana')) {
-    const nextWeekStart = new Date(today);
-    nextWeekStart.setDate(nextWeekStart.getDate() + (7 - nextWeekStart.getDay() + 1));
-    
-    const nextWeekEnd = new Date(nextWeekStart);
-    nextWeekEnd.setDate(nextWeekEnd.getDate() + 6);
-    nextWeekEnd.setHours(23, 59, 59, 999);
-    
-    return {
-      timeMin: nextWeekStart.toISOString(),
-      timeMax: nextWeekEnd.toISOString()
-    };
-  }
-  
-  // Default to next 7 days if no specific time found
-  const nextWeek = new Date(today);
-  nextWeek.setDate(nextWeek.getDate() + 7);
-  nextWeek.setHours(23, 59, 59, 999);
-  
-  return {
-    timeMin: now.toISOString(),
-    timeMax: nextWeek.toISOString()
-  };
-}
+// export function parseTimeExpression(expression: string): { timeMin?: string; timeMax?: string } {
+//   const now = new Date();
+//   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+//   expression = expression.toLowerCase();
+
+//   if (expression.includes('oggi')) {
+//     const endOfDay = new Date(today);
+//     endOfDay.setHours(23, 59, 59, 999);
+
+//     return {
+//       timeMin: today.toISOString(),
+//       timeMax: endOfDay.toISOString()
+//     };
+//   }
+
+//   if (expression.includes('domani')) {
+//     const tomorrow = new Date(today);
+//     tomorrow.setDate(tomorrow.getDate() + 1);
+
+//     const endOfTomorrow = new Date(tomorrow);
+//     endOfTomorrow.setHours(23, 59, 59, 999);
+
+//     return {
+//       timeMin: tomorrow.toISOString(),
+//       timeMax: endOfTomorrow.toISOString()
+//     };
+//   }
+
+//   if (expression.includes('questa settimana')) {
+//     const endOfWeek = new Date(today);
+//     endOfWeek.setDate(endOfWeek.getDate() + (7 - endOfWeek.getDay()));
+//     endOfWeek.setHours(23, 59, 59, 999);
+
+//     return {
+//       timeMin: today.toISOString(),
+//       timeMax: endOfWeek.toISOString()
+//     };
+//   }
+
+//   if (expression.includes('prossima settimana')) {
+//     const nextWeekStart = new Date(today);
+//     nextWeekStart.setDate(nextWeekStart.getDate() + (7 - nextWeekStart.getDay() + 1));
+
+//     const nextWeekEnd = new Date(nextWeekStart);
+//     nextWeekEnd.setDate(nextWeekEnd.getDate() + 6);
+//     nextWeekEnd.setHours(23, 59, 59, 999);
+
+//     return {
+//       timeMin: nextWeekStart.toISOString(),
+//       timeMax: nextWeekEnd.toISOString()
+//     };
+//   }
+
+//   // Default to next 7 days if no specific time found
+//   const nextWeek = new Date(today);
+//   nextWeek.setDate(nextWeek.getDate() + 7);
+//   nextWeek.setHours(23, 59, 59, 999);
+
+//   return {
+//     timeMin: now.toISOString(),
+//     timeMax: nextWeek.toISOString()
+//   };
+// }
 

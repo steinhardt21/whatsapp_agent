@@ -21,7 +21,8 @@ export const getWhatsAppInstance = (): WhatsApp => {
     console.log('Phone Number ID:', config.WA_PHONE_NUMBER_ID);
     console.log('Access Token (first 20 chars):', config.CLOUD_API_ACCESS_TOKEN.substring(0, 20) + '...');
     
-    whatsappInstance = new WhatsApp();
+    // Initialize WhatsApp with phone number ID as per the library documentation
+    whatsappInstance = new WhatsApp(parseInt(config.WA_PHONE_NUMBER_ID, 10));
   }
   return whatsappInstance;
 };

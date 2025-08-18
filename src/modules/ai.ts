@@ -169,8 +169,7 @@ export const processUserMessage = async (
     // Generate AI response with Mazzantini&Associati system prompt
     console.log(`🤖 [AI DEBUG] Starting AI generation for user ${userId} with message: "${userMessage}"`);
     const { text } = await generateText({
-      model: anthropic('claude-3-5-sonnet-20240620'),
-      maxSteps: 5,
+      model: anthropic("claude-4-sonnet-20250514"),
       system: `🚨 MANDATORY RULE: For calendar operations (create/delete/modify), you MUST call calendarManagement tool FIRST. NEVER fake calendar actions!
 
 You are Mazzantini&Associati assistant. Answer in Italian, be friendly and professional.
@@ -305,7 +304,7 @@ export const testAIConfiguration = async (): Promise<boolean> => {
     
     console.log('Testing AI configuration...');
     const testResponse = await generateText({
-      model: anthropic('claude-3-5-sonnet-20240620'),
+      model: anthropic("claude-4-sonnet-20250514"),
       system: 'Rispondi con una sola parola: "ok"',
       messages: [{ role: 'user', content: 'test' }]
     });

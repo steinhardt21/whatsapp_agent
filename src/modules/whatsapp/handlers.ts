@@ -44,6 +44,11 @@ export const handleIncomingMessage = async (message: any, whatsappPhoneId?: stri
 export const processMessages = async (messages: any[], whatsappPhoneId?: string): Promise<void> => {
   // Process all messages in parallel to allow proper batching
   // Don't await individual messages to allow the orchestrator to batch them
+
+
+  console.log('🟠**** Processing messages:', messages);
+
+
   const promises = messages.map(message => 
     handleIncomingMessage(message, whatsappPhoneId).catch(error => {
       console.error(`❌ Error processing message ${message.id}:`, error);

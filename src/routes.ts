@@ -32,6 +32,7 @@ const webhookMessageHandler = async (
   request: FastifyRequest<{ Body: WhatsAppWebhookBody }>, 
   reply: FastifyReply
 ) => {
+
   const result = await processWebhookMessage(request.body);
   return reply.status(result.statusCode).send(result.response);
 };

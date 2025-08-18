@@ -63,7 +63,7 @@ export const handleIncomingMessage = async (
       const aborted = await redisOrchestratorState.abortCurrentProcessing(phoneNumber);
       
       if (aborted) {
-        console.log(`🔄 Successfully interrupted processing for ${phoneNumber}, new generation: ${newGeneration}`);
+        console.log(`🔔 🔄 Successfully interrupted processing for ${phoneNumber}, new generation: ${newGeneration}`);
       } else {
         console.log(`⏳ Could not interrupt processing for ${phoneNumber} - message added to batch`);
       }

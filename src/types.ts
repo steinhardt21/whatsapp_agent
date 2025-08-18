@@ -74,6 +74,10 @@ export interface WhatsAppWebhookBody {
           text?: {
             body: string;
           };
+          button?: {
+            payload: string;
+            text: string;
+          };
         }>;
         statuses?: Array<{
           id: string;
